@@ -1,0 +1,277 @@
+from __future__ import annotations
+
+import json
+import re
+from typing import Any
+
+from ..http import JsonHttpClient
+from ..models import Evidence, Lead, QueryPlan, SearchGoal, WebHit
+
+
+class GeminiPlannerProvider:
+    """Gemini used only as the reasoning/planning layer.
+
+    v0.1.2 intentionally does NOT use Google Maps/Search grounding.
+    Discovery is delegated to an independent search provider so free-tier
+    Gemini keys can still power the agent brain.
+    """
+
+    name = "gemini"
+    MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+
+    def __init__(self, api_key: str, *, model: str = "gemini-3.1-flash-lite", http: JsonHttpClient | None = None):
+        if not api_key.strip():
+            raise ValueError("Gemini API key is required.")
+        self.api_key = api_key.strip()
+        self.model = model.strip() or "gemini-3.1-flash-lite"
+        self.http = http or JsonHttpClient(timeout=45)
+
+    @property
+    def _headers(self) -> dict[str, str]:
+        return {"x-goog-api-key": self.api_key}
+
+    @property
+    def _generate_url(self) -> str:
+        return f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+
+    def validate_key(self, *, live_generation: bool = True) -> tuple[bool, str]:
+        try:
+            data = self.http.get_json(self.MODELS_URL, params={"pageSize": 200, "key": self.api_key})
+        except Exception as exc:
+            return False, str(exc)
+
+        models = data.get("models")
+        if not isinstance(models, list):
+            return False, "Resposta inesperada da Gemini Models API."
+
+        names = {str(item.get("name") or "").removeprefix("models/") for item in models if isinstance(item, dict)}
+        if self.model not in names:
+            sample = ", ".join(sorted(name for name in names if name)[:8])
+            return False, f"Modelo '{self.model}' não apareceu na lista disponível. Exemplos: {sample or 'nenhum'}"
+
+        if not live_generation:
+            return True, "OK"
+
+        try:
+            response = self._generate("Return exactly the text OK.", max_output_tokens=8)
+            text = _extract_generate_text(response).strip()
+        except Exception as exc:
+            return False, str(exc)
+        return (bool(text), "OK" if text else "Gemini respondeu sem texto.")
+
+    def _generate(self, prompt: str, *, max_output_tokens: int = 512) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.2,
+                "maxOutputTokens": max_output_tokens,
+                "responseMimeType": "application/json" if max_output_tokens > 8 else "text/plain",
+            },
+        }
+        return self.http.post_json(self._generate_url, payload=payload, headers=self._headers)
+
+
+    def extract_leads(
+        self,
+        hits: list[WebHit],
+        goal: SearchGoal,
+        *,
+        query: str,
+        max_leads: int = 20,
+    ) -> list[Lead]:
+        max_leads = max(1, min(int(max_leads), 50))
+        evidence_rows: list[str] = []
+        for idx, hit in enumerate(hits[:20], start=1):
+            snippet = " ".join((hit.description or "").split())[:900]
+            evidence_rows.append(
+                f"[{idx}] TITLE: {hit.title}\nURL: {hit.url}\nSNIPPET: {snippet}"
+            )
+        evidence_block = "\n\n".join(evidence_rows)
+        prompt = f"""
+You are the extraction layer of a lead-research agent.
+Use ONLY the supplied web-search evidence. Never invent a company, phone, email, URL, address, or fact.
+
+Target business segment: {goal.segment}
+Target location: {goal.location_label}
+Search phrase that produced this evidence: {query}
+
+Return ONLY valid JSON with this exact top-level shape:
+{{
+  "leads": [
+    {{
+      "name": "business name",
+      "phone": null,
+      "email": null,
+      "website": null,
+      "socials": [],
+      "address": null,
+      "source_url": "one of the evidence URLs",
+      "source_title": "title of the evidence item",
+      "confidence": 0.0
+    }}
+  ]
+}}
+
+Rules:
+- Extract only real businesses that are clearly relevant to the target segment and target city/region.
+- A directory/list result may mention MANY businesses: extract each explicitly named relevant business, up to {max_leads} total. Do not return the directory itself as a business.
+- A social profile/reel/page can be evidence for a business.
+- Do not create a separate lead for the same business just because multiple evidence items mention it.
+- Keep phone/email exactly as supported by evidence; do not guess missing digits.
+- Set website only when an official business website/domain is explicit. Instagram/Facebook/directories are not websites.
+- socials may contain social URLs explicitly present in the evidence.
+- source_url MUST be one of the evidence URLs above.
+- confidence must be between 0 and 1 and represent confidence that this is a real, relevant business from the evidence.
+- Omit weak/ambiguous matches instead of guessing.
+
+EVIDENCE:
+{evidence_block}
+""".strip()
+        data = self._generate(prompt, max_output_tokens=2600)
+        text = _extract_generate_text(data)
+        parsed = _extract_json_object(text)
+        values = parsed.get("leads")
+        if not isinstance(values, list):
+            raise RuntimeError("Gemini extractor did not return a leads array.")
+
+        leads: list[Lead] = []
+        allowed_urls = {hit.url for hit in hits}
+        title_by_url = {hit.url: hit.title for hit in hits}
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            source_url = str(item.get("source_url") or "").strip()
+            if not name or source_url not in allowed_urls:
+                continue
+            try:
+                confidence = float(item.get("confidence", 0.0))
+            except (TypeError, ValueError):
+                confidence = 0.0
+            if confidence < 0.55:
+                continue
+            socials_raw = item.get("socials")
+            socials = []
+            if isinstance(socials_raw, list):
+                socials = [str(v).strip() for v in socials_raw if str(v).strip().startswith(("http://", "https://"))]
+            elif isinstance(socials_raw, str) and socials_raw.strip().startswith(("http://", "https://")):
+                socials = [socials_raw.strip()]
+
+            website = _nullable_text(item.get("website"))
+            if website and not website.startswith(("http://", "https://")):
+                website = "https://" + website.lstrip("/")
+            lead = Lead(
+                name=name,
+                city=goal.city,
+                state=goal.state,
+                country=goal.country,
+                address=_nullable_text(item.get("address")),
+                phone=_nullable_text(item.get("phone")),
+                email=_nullable_text(item.get("email")),
+                website=website,
+                socials=list(dict.fromkeys(socials)),
+                categories=[goal.segment],
+                provider_url=source_url,
+                source_provider="tavily+gemini",
+                discovered_query=query,
+                evidence=[
+                    Evidence(source="tavily", kind="web_search", url=source_url, detail=title_by_url.get(source_url, "")),
+                    Evidence(source=self.name, kind="lead_extraction", detail=f"confidence={confidence:.2f}"),
+                ],
+                raw={"extracted": item},
+            )
+            leads.append(lead)
+            if len(leads) >= max_leads:
+                break
+        return leads
+
+    def plan_queries(self, goal: SearchGoal, *, max_queries: int = 6) -> QueryPlan:
+        max_queries = max(2, min(int(max_queries), 10))
+        prompt = f"""
+You plan search phrases for a lead-research agent.
+Return ONLY valid JSON with this exact shape:
+{{"queries":["..."],"rationale":"..."}}
+
+Goal: find real businesses in {goal.location_label}.
+User segment: {goal.segment}
+Create up to {max_queries} concise commercial/category phrases that a real customer could use to find this kind of business.
+The first phrase MUST be exactly: {goal.segment}
+Use useful synonyms and adjacent commercial descriptions, not filler like "empresa" or "profissional" unless genuinely part of how the segment is searched.
+Do NOT include city/state/country in each phrase; the search provider receives location separately.
+Do NOT invent company names.
+""".strip()
+        data = self._generate(prompt, max_output_tokens=700)
+        text = _extract_generate_text(data)
+        parsed = _extract_json_object(text)
+        values = parsed.get("queries")
+        if not isinstance(values, list):
+            raise RuntimeError("Gemini planner did not return a queries array.")
+
+        clean: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            query = " ".join(str(value).split()).strip()
+            folded = query.casefold()
+            if query and folded not in seen:
+                clean.append(query)
+                seen.add(folded)
+        if goal.segment.casefold() not in seen:
+            clean.insert(0, goal.segment)
+        clean = clean[:max_queries] or [goal.segment]
+        return QueryPlan(
+            queries=clean,
+            rationale=str(parsed.get("rationale") or "").strip(),
+            generated_by=f"gemini:{self.model}",
+        )
+
+
+
+def _nullable_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.casefold() in {"null", "none", "n/a", "unknown"}:
+        return None
+    return text
+
+
+def _extract_generate_text(data: dict[str, Any]) -> str:
+    chunks: list[str] = []
+    for candidate in data.get("candidates") or []:
+        if not isinstance(candidate, dict):
+            continue
+        content = candidate.get("content")
+        if not isinstance(content, dict):
+            continue
+        for part in content.get("parts") or []:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                chunks.append(part["text"])
+    if not chunks:
+        raise RuntimeError("Gemini generateContent returned no text.")
+    return "\n".join(chunks).strip()
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    cleaned = text.strip()
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        value = json.loads(cleaned)
+        if isinstance(value, dict):
+            return value
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{.*\}", cleaned, flags=re.S)
+    if not match:
+        raise RuntimeError(f"Gemini output was not JSON: {cleaned[:300]}")
+    try:
+        value = json.loads(match.group(0))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Gemini output contained invalid JSON: {cleaned[:300]}") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError("Gemini JSON output must be an object.")
+    return value
+
+
+# Backwards-compatible name for imports from earlier local copies.
+GeminiProvider = GeminiPlannerProvider
