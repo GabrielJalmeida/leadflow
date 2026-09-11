@@ -4,7 +4,7 @@ import re
 from urllib.parse import urlparse
 
 from ..http import JsonHttpClient
-from ..models import Evidence, Lead, WebHit, SearchGoal
+from ..models import Evidence, Lead, WebHit, SearchGoal, WebsiteStatus
 
 
 SOCIAL_HOSTS = {
@@ -114,11 +114,23 @@ class TavilySearchProvider:
                 phone=phone_match.group(0).strip() if phone_match else None,
                 email=email_match.group(0).strip() if email_match else None,
                 website=website,
+                website_status=WebsiteStatus.PRESENT if website else WebsiteStatus.UNKNOWN,
                 socials=[social] if social else [],
                 categories=[goal.segment],
                 provider_url=hit.url,
                 source_provider=self.name,
                 discovered_query=query,
+                discovery_confidence=0.65,
+                field_confidence={
+                    key: 0.65
+                    for key, present in {
+                        "phone": bool(phone_match),
+                        "email": bool(email_match),
+                        "website": bool(website),
+                        "socials": bool(social),
+                    }.items()
+                    if present
+                },
                 evidence=[Evidence(source=self.name, kind="web_search", url=hit.url, detail=hit.title)],
                 raw={"title": hit.title, "description": hit.description, "url": hit.url},
             )

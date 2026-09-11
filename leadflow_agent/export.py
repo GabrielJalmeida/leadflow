@@ -28,7 +28,7 @@ def export_report(report: ResearchReport, output_dir: str = "output") -> tuple[P
         writer = csv.DictWriter(
             handle,
             fieldnames=[
-                "score", "name", "phone", "email", "website", "socials", "address",
+                "score", "confidence_score", "name", "phone", "email", "website", "website_status", "socials", "address",
                 "city", "state", "categories", "rating", "review_count", "source_provider",
                 "discovered_query", "score_reasons",
             ],
@@ -38,10 +38,12 @@ def export_report(report: ResearchReport, output_dir: str = "output") -> tuple[P
             writer.writerow(
                 {
                     "score": lead.score,
+                    "confidence_score": lead.confidence_score,
                     "name": lead.name,
                     "phone": lead.phone or "",
                     "email": lead.email or "",
                     "website": lead.website or "",
+                    "website_status": lead.website_status.value,
                     "socials": " | ".join(lead.socials),
                     "address": lead.address or "",
                     "city": lead.city,

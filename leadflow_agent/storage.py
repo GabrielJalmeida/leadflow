@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 
 from .dedupe import lead_key
-from .models import Lead, ResearchReport
+from .models import ResearchReport
 
 
 SCHEMA = """
@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS leads (
     phone TEXT,
     email TEXT,
     website TEXT,
+    website_status TEXT NOT NULL DEFAULT 'unknown',
     address TEXT,
+    confidence_score INTEGER NOT NULL DEFAULT 0,
     score INTEGER NOT NULL DEFAULT 0,
     source_provider TEXT,
     payload_json TEXT NOT NULL,
@@ -55,6 +57,23 @@ class LeadStore:
         self.conn = sqlite3.connect(self.path)
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.executescript(SCHEMA)
+        self._migrate_existing_database()
+
+    def _migrate_existing_database(self) -> None:
+        """Small idempotent migration layer for v0.x SQLite databases."""
+        columns = {
+            str(row[1])
+            for row in self.conn.execute("PRAGMA table_info(leads)").fetchall()
+        }
+        if "website_status" not in columns:
+            self.conn.execute(
+                "ALTER TABLE leads ADD COLUMN website_status TEXT NOT NULL DEFAULT 'unknown'"
+            )
+        if "confidence_score" not in columns:
+            self.conn.execute(
+                "ALTER TABLE leads ADD COLUMN confidence_score INTEGER NOT NULL DEFAULT 0"
+            )
+        self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
@@ -82,8 +101,9 @@ class LeadStore:
                 """
                 INSERT INTO leads (
                     lead_key, name, city, state, country, phone, email,
-                    website, address, score, source_provider, payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    website, website_status, address, confidence_score, score,
+                    source_provider, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(lead_key) DO UPDATE SET
                     name=excluded.name,
                     city=excluded.city,
@@ -92,7 +112,13 @@ class LeadStore:
                     phone=COALESCE(excluded.phone, leads.phone),
                     email=COALESCE(excluded.email, leads.email),
                     website=COALESCE(excluded.website, leads.website),
+                    website_status=CASE
+                        WHEN excluded.website IS NOT NULL THEN 'present'
+                        WHEN leads.website_status = 'present' THEN leads.website_status
+                        ELSE excluded.website_status
+                    END,
                     address=COALESCE(excluded.address, leads.address),
+                    confidence_score=MAX(excluded.confidence_score, leads.confidence_score),
                     score=excluded.score,
                     source_provider=excluded.source_provider,
                     payload_json=excluded.payload_json,
@@ -100,8 +126,8 @@ class LeadStore:
                 """,
                 (
                     key, lead.name, lead.city, lead.state, lead.country, lead.phone,
-                    lead.email, lead.website, lead.address, lead.score,
-                    lead.source_provider, payload,
+                    lead.email, lead.website, lead.website_status.value, lead.address,
+                    lead.confidence_score, lead.score, lead.source_provider, payload,
                 ),
             )
             self.conn.execute(

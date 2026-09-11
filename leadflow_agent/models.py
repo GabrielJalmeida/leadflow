@@ -2,11 +2,27 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+class WebsiteStatus(str, Enum):
+    """Lifecycle state for a lead website.
+
+    UNKNOWN means we have not investigated enough to make a claim.
+    PRESENT means an official website was identified.
+    NOT_FOUND means a dedicated investigation found no official website.
+    UNREACHABLE means an official/likely website was identified but could not be reached.
+    """
+
+    UNKNOWN = "unknown"
+    PRESENT = "present"
+    NOT_FOUND = "not_found"
+    UNREACHABLE = "unreachable"
 
 
 @dataclass(slots=True)
@@ -38,6 +54,8 @@ class Evidence:
     kind: str
     url: str | None = None
     detail: str | None = None
+    target_field: str | None = None
+    confidence: float | None = None
     observed_at: str = field(default_factory=utc_now_iso)
 
 
@@ -51,6 +69,7 @@ class Lead:
     phone: str | None = None
     email: str | None = None
     website: str | None = None
+    website_status: WebsiteStatus = WebsiteStatus.UNKNOWN
     socials: list[str] = field(default_factory=list)
     categories: list[str] = field(default_factory=list)
     rating: float | None = None
@@ -61,10 +80,25 @@ class Lead:
     provider_url: str | None = None
     source_provider: str = ""
     discovered_query: str = ""
+    discovery_confidence: float = 0.0
+    field_confidence: dict[str, float] = field(default_factory=dict)
+    confidence_score: int = 0
     score: int = 0
     score_reasons: list[str] = field(default_factory=list)
     evidence: list[Evidence] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
+
+    def __post_init__(self) -> None:
+        # Backwards compatibility: providers from older code already setting a
+        # website should automatically be treated as PRESENT.
+        if self.website and self.website_status == WebsiteStatus.UNKNOWN:
+            self.website_status = WebsiteStatus.PRESENT
+
+        self.discovery_confidence = _clamp_confidence(self.discovery_confidence)
+        self.field_confidence = {
+            str(key): _clamp_confidence(value)
+            for key, value in self.field_confidence.items()
+        }
 
     def to_dict(self, include_raw: bool = False) -> dict[str, Any]:
         data = asdict(self)
@@ -105,3 +139,11 @@ class ResearchReport:
             "finished_at": self.finished_at,
             "errors": self.errors,
         }
+
+
+def _clamp_confidence(value: object) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(number, 1.0))

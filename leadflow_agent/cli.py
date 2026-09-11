@@ -16,7 +16,7 @@ from .providers.tavily import TavilySearchProvider
 from .storage import LeadStore
 
 
-VERSION = "0.1.3"
+VERSION = "0.1.4-dev"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -205,6 +205,8 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
     )
 
     print(f"Planner: {report.plan.generated_by}")
+    if report.plan.rationale:
+        print(f"Motivo: {report.plan.rationale}")
     print("Consultas planejadas:")
     for q in report.plan.queries:
         marker = "✓" if q in report.queries_executed else "·"
@@ -226,10 +228,17 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
     print("TOP LEADS")
     print("---------")
     for idx, lead in enumerate(report.leads, start=1):
-        web = lead.website or "site não identificado"
+        if lead.website:
+            web = lead.website
+        elif lead.website_status.value == "not_found":
+            web = "sem site (verificado)"
+        elif lead.website_status.value == "unreachable":
+            web = "site indisponível"
+        else:
+            web = "site ainda não verificado"
         phone = lead.phone or "sem telefone"
         reviews = f"{lead.review_count} reviews" if lead.review_count is not None else "reviews ?"
-        print(f"{idx:>2}. [{lead.score:>3}] {lead.name}")
+        print(f"{idx:>2}. [opp {lead.score:>3} | conf {lead.confidence_score:>3}] {lead.name}")
         print(f"    {phone} | {web} | {reviews}")
         if lead.address:
             print(f"    {lead.address}")

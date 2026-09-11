@@ -6,7 +6,7 @@ from pathlib import Path
 
 from leadflow_agent.agent import LeadResearchAgent
 from leadflow_agent.dedupe import lead_key, merge_leads, normalize_text
-from leadflow_agent.models import Lead, QueryPlan, SearchGoal, WebHit
+from leadflow_agent.models import Lead, QueryPlan, SearchGoal, WebHit, WebsiteStatus
 from leadflow_agent.scoring import score_lead
 from leadflow_agent.storage import LeadStore
 
@@ -80,10 +80,25 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(a.website, "https://a.example")
         self.assertEqual(len(a.socials), 2)
 
-    def test_score_prefers_missing_site(self):
+    def test_unknown_site_is_not_rewarded(self):
         lead = score_lead(Lead(name="A", phone="123", review_count=30))
-        self.assertGreaterEqual(lead.score, 70)
-        self.assertTrue(any("site não identificado" in r for r in lead.score_reasons))
+        self.assertEqual(lead.website_status, WebsiteStatus.UNKNOWN)
+        self.assertEqual(lead.score, 40)
+        self.assertTrue(any("site ainda não investigado" in r for r in lead.score_reasons))
+
+    def test_verified_missing_site_is_rewarded(self):
+        lead = score_lead(Lead(
+            name="A",
+            phone="123",
+            review_count=30,
+            website_status=WebsiteStatus.NOT_FOUND,
+        ))
+        self.assertEqual(lead.score, 75)
+        self.assertTrue(any("ausência de site verificada" in r for r in lead.score_reasons))
+
+    def test_website_auto_marks_present(self):
+        lead = Lead(name="A", website="https://a.example")
+        self.assertEqual(lead.website_status, WebsiteStatus.PRESENT)
 
     def test_agent_adapts_until_goal(self):
         provider = FakeLocal()
@@ -128,6 +143,9 @@ class CoreTests(unittest.TestCase):
                 run_id = store.save_report(report)
                 self.assertEqual(run_id, 1)
                 self.assertEqual(store.count_leads(), 3)
+                columns = {row[1] for row in store.conn.execute("PRAGMA table_info(leads)")}
+                self.assertIn("website_status", columns)
+                self.assertIn("confidence_score", columns)
             finally:
                 store.close()
 

@@ -5,7 +5,7 @@ import re
 from typing import Any
 
 from ..http import JsonHttpClient
-from ..models import Evidence, Lead, QueryPlan, SearchGoal, WebHit
+from ..models import Evidence, Lead, QueryPlan, SearchGoal, WebHit, WebsiteStatus
 
 
 class GeminiPlannerProvider:
@@ -169,14 +169,27 @@ EVIDENCE:
                 phone=_nullable_text(item.get("phone")),
                 email=_nullable_text(item.get("email")),
                 website=website,
+                website_status=WebsiteStatus.PRESENT if website else WebsiteStatus.UNKNOWN,
                 socials=list(dict.fromkeys(socials)),
                 categories=[goal.segment],
                 provider_url=source_url,
                 source_provider="tavily+gemini",
                 discovered_query=query,
+                discovery_confidence=confidence,
+                field_confidence={
+                    key: confidence
+                    for key, present in {
+                        "phone": bool(_nullable_text(item.get("phone"))),
+                        "email": bool(_nullable_text(item.get("email"))),
+                        "website": bool(website),
+                        "socials": bool(socials),
+                        "address": bool(_nullable_text(item.get("address"))),
+                    }.items()
+                    if present
+                },
                 evidence=[
                     Evidence(source="tavily", kind="web_search", url=source_url, detail=title_by_url.get(source_url, "")),
-                    Evidence(source=self.name, kind="lead_extraction", detail=f"confidence={confidence:.2f}"),
+                    Evidence(source=self.name, kind="lead_extraction", target_field="identity", confidence=confidence, detail=f"confidence={confidence:.2f}"),
                 ],
                 raw={"extracted": item},
             )
