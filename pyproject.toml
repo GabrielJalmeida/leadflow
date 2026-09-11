@@ -1,6 +1,6 @@
 [project]
 name = "leadflow-agent"
-version = "0.1.4"
+version = "0.2.0a1"
 description = "AI-assisted lead discovery and opportunity intelligence engine"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,7 +16,7 @@ browser = [
 leadflow = "leadflow_agent.cli:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
