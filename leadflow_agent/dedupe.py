@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from .models import Lead
+from .models import Lead, WebsiteStatus
 
 
 def normalize_text(value: str | None) -> str:
@@ -37,6 +37,18 @@ def merge_leads(current: Lead, incoming: Lead) -> Lead:
     ):
         if getattr(current, attr) in (None, "") and getattr(incoming, attr) not in (None, ""):
             setattr(current, attr, getattr(incoming, attr))
+
+    if current.website:
+        current.website_status = WebsiteStatus.PRESENT
+    elif current.website_status == WebsiteStatus.UNKNOWN and incoming.website_status != WebsiteStatus.UNKNOWN:
+        current.website_status = incoming.website_status
+
+    current.discovery_confidence = max(current.discovery_confidence, incoming.discovery_confidence)
+    for field_name, confidence in incoming.field_confidence.items():
+        current.field_confidence[field_name] = max(
+            current.field_confidence.get(field_name, 0.0),
+            confidence,
+        )
 
     current.socials = list(dict.fromkeys([*current.socials, *incoming.socials]))
     current.categories = list(dict.fromkeys([*current.categories, *incoming.categories]))

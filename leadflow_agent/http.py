@@ -9,7 +9,10 @@ from typing import Any
 
 
 class HTTPError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status_code: int | None = None, detail: Any = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.detail = detail
 
 
 @dataclass(slots=True)
@@ -50,7 +53,7 @@ class JsonHttpClient:
                 detail = json.loads(raw)
             except json.JSONDecodeError:
                 detail = raw[:1000]
-            raise HTTPError(f"HTTP {exc.code}: {detail}") from exc
+            raise HTTPError(f"HTTP {exc.code}: {detail}", status_code=exc.code, detail=detail) from exc
         except urllib.error.URLError as exc:
             raise HTTPError(f"Network error: {exc.reason}") from exc
 

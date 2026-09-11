@@ -4,7 +4,7 @@ import re
 from urllib.parse import urlparse
 
 from ..http import JsonHttpClient
-from ..models import Evidence, Lead, WebHit, SearchGoal
+from ..models import Evidence, Lead, WebHit, SearchGoal, WebsiteStatus
 
 
 SOCIAL_HOSTS = {
@@ -17,7 +17,7 @@ SOCIAL_HOSTS = {
     "youtube.com", "www.youtube.com",
 }
 DIRECTORY_HINTS = (
-    "servilink.", "acheioprofissional.", "guiamais.", "telelistas.",
+    "servilink.", "acheioprofissional.", "guiamais.", "telelistas.", "marcenarias.net.br",
     "solutudo.", "econodata.", "cnpj.", "jusbrasil.", "reclameaqui.",
     "yelp.", "foursquare.", "tripadvisor.",
 )
@@ -99,12 +99,18 @@ class TavilySearchProvider:
             domain = _host(hit.url)
             if _looks_like_directory(domain, hit.title):
                 continue
+            if not _has_segment_signal(hit, goal.segment):
+                continue
             name = _business_name_from_title(hit.title)
             if not name:
                 continue
             phone_match = PHONE_RE.search(hit.description or "")
             email_match = EMAIL_RE.search(hit.description or "")
-            social = hit.url if domain in SOCIAL_HOSTS else None
+            social = hit.url if domain in SOCIAL_HOSTS and _is_social_profile_url(hit.url) else None
+            if domain in SOCIAL_HOSTS and not social:
+                # Never promote social posts/reels as businesses in deterministic
+                # fallback mode. The AI extractor may still use them as evidence.
+                continue
             website = None if social else (hit.url if _candidate_site(hit.url) else None)
             lead = Lead(
                 name=name,
@@ -114,11 +120,23 @@ class TavilySearchProvider:
                 phone=phone_match.group(0).strip() if phone_match else None,
                 email=email_match.group(0).strip() if email_match else None,
                 website=website,
+                website_status=WebsiteStatus.PRESENT if website else WebsiteStatus.UNKNOWN,
                 socials=[social] if social else [],
                 categories=[goal.segment],
                 provider_url=hit.url,
                 source_provider=self.name,
                 discovered_query=query,
+                discovery_confidence=0.65,
+                field_confidence={
+                    key: 0.65
+                    for key, present in {
+                        "phone": bool(phone_match),
+                        "email": bool(email_match),
+                        "website": bool(website),
+                        "socials": bool(social),
+                    }.items()
+                    if present
+                },
                 evidence=[Evidence(source=self.name, kind="web_search", url=hit.url, detail=hit.title)],
                 raw={"title": hit.title, "description": hit.description, "url": hit.url},
             )
@@ -141,11 +159,52 @@ def _looks_like_directory(domain: str, title: str) -> bool:
     return any(marker in folded for marker in markers)
 
 
+def _is_social_profile_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        host = parsed.netloc.casefold().split(":", 1)[0]
+        parts = [part for part in parsed.path.split("/") if part]
+    except Exception:
+        return False
+
+    if host in {"instagram.com", "www.instagram.com"}:
+        return len(parts) == 1 and parts[0].casefold() not in {"p", "reel", "reels", "stories", "explore"}
+    if host in {"facebook.com", "www.facebook.com"}:
+        if not parts:
+            return False
+        if parts[0].casefold() in {"reel", "reels", "watch", "story.php", "photo", "photos"}:
+            return False
+        # Facebook /p/<page-name-id> is a page identity, not a post.
+        return True
+    if host in {"linkedin.com", "www.linkedin.com"}:
+        return len(parts) >= 2 and parts[0].casefold() in {"company", "in"}
+    if host in {"tiktok.com", "www.tiktok.com"}:
+        return len(parts) == 1 and parts[0].startswith("@")
+    if host in {"youtube.com", "www.youtube.com"}:
+        return bool(parts) and (parts[0].startswith("@") or parts[0].casefold() in {"channel", "c", "user"})
+    if host in {"x.com", "www.x.com", "twitter.com", "www.twitter.com"}:
+        return len(parts) == 1
+    return False
+
+
 def _candidate_site(url: str) -> bool:
     domain = _host(url)
     if not domain or domain in SOCIAL_HOSTS:
         return False
     return not any(token in domain for token in DIRECTORY_HINTS)
+
+
+def _has_segment_signal(hit: WebHit, segment: str) -> bool:
+    text = f"{hit.title} {hit.description}".casefold()
+    folded_segment = " ".join(segment.casefold().split())
+    if folded_segment and folded_segment in text:
+        return True
+    if "marcenar" in folded_segment:
+        return any(token in text for token in (
+            "marcenar", "móveis planejados", "moveis planejados",
+            "móveis sob medida", "moveis sob medida", "marceneiro",
+        ))
+    return False
 
 
 def _business_name_from_title(title: str) -> str:

@@ -28,6 +28,18 @@ class Settings:
     brave_api_key: str = ""
     db_path: str = "leadflow.db"
 
+    def secret_values(self) -> tuple[str, ...]:
+        return tuple(
+            value
+            for value in (
+                self.gemini_api_key,
+                self.tavily_api_key,
+                self.outscraper_api_key,
+                self.brave_api_key,
+            )
+            if value
+        )
+
     @classmethod
     def load(cls, dotenv_path: str | Path = ".env") -> "Settings":
         _load_dotenv(Path(dotenv_path))
