@@ -20,6 +20,7 @@ from .storage import LeadStore
 from .services.investigator import LeadInvestigator
 from .services.website_auditor import WebsiteAuditor
 from .services.browser_auditor import BrowserAuditor
+from .services.visual_auditor import VisualAuditor
 
 
 VERSION = "0.1.4-dev"
@@ -140,6 +141,28 @@ def _parser() -> argparse.ArgumentParser:
         "--refresh-browser-audits",
         action="store_true",
         help="Refaz auditorias de navegador mesmo quando existe resultado recente.",
+    )
+    search.add_argument(
+        "--visual-audit",
+        action="store_true",
+        help="Usa Gemini multimodal sobre screenshots desktop/mobile para avaliar qualidade visual.",
+    )
+    search.add_argument(
+        "--visual-audit-limit",
+        type=int,
+        default=3,
+        help="Máximo de sites avaliados visualmente por IA (default: 3).",
+    )
+    search.add_argument(
+        "--visual-audit-ttl-days",
+        type=int,
+        default=14,
+        help="Validade da análise visual, de 1 a 30 dias (default: 14).",
+    )
+    search.add_argument(
+        "--refresh-visual-audits",
+        action="store_true",
+        help="Refaz análises visuais mesmo quando existe resultado recente.",
     )
     search.add_argument("--no-ai", action="store_true", help="Desliga Gemini; Tavily usa extração heurística conservadora.")
     search.add_argument(
@@ -272,6 +295,7 @@ def _build_agent(
             lead_memory=memory,
             website_auditor=WebsiteAuditor(),
             browser_auditor=BrowserAuditor(),
+            visual_auditor=VisualAuditor(llm) if llm is not None else None,
         )
 
     if provider_name == "outscraper" or (provider_name == "auto" and settings.outscraper_api_key):
@@ -291,6 +315,7 @@ def _build_agent(
             lead_memory=memory,
             website_auditor=WebsiteAuditor(),
             browser_auditor=BrowserAuditor(),
+            visual_auditor=VisualAuditor(llm) if llm is not None else None,
         )
 
     if provider_name == "brave" or (provider_name == "auto" and settings.brave_api_key):
@@ -307,6 +332,7 @@ def _build_agent(
             lead_memory=memory,
             website_auditor=WebsiteAuditor(),
             browser_auditor=BrowserAuditor(),
+            visual_auditor=VisualAuditor(llm) if llm is not None else None,
         )
 
     raise RuntimeError("Nenhum provider de busca configurado. Rode `python -m leadflow_agent setup`.")
@@ -339,6 +365,15 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
         return 2
     if args.browser_audit_ttl_days < 1 or args.browser_audit_ttl_days > 30:
         print("--browser-audit-ttl-days deve ficar entre 1 e 30.", file=sys.stderr)
+        return 2
+    if args.visual_audit_limit < 0:
+        print("--visual-audit-limit não pode ser negativo.", file=sys.stderr)
+        return 2
+    if args.visual_audit_ttl_days < 1 or args.visual_audit_ttl_days > 30:
+        print("--visual-audit-ttl-days deve ficar entre 1 e 30.", file=sys.stderr)
+        return 2
+    if args.visual_audit and (args.no_ai or not settings.gemini_api_key):
+        print("--visual-audit requer Gemini configurado.", file=sys.stderr)
         return 2
     if args.cache_ttl_days < 1 or args.cache_ttl_days > 90:
         print("--cache-ttl-days deve ficar entre 1 e 90.", file=sys.stderr)
@@ -406,6 +441,11 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
             f"Browser/UX audit: ATIVO — até {args.browser_audit_limit} sites | "
             f"TTL {args.browser_audit_ttl_days} dias | timeout {args.browser_timeout:g}s"
         )
+    if args.visual_audit:
+        print(
+            f"Visual audit: ATIVO — até {args.visual_audit_limit} sites | "
+            f"TTL {args.visual_audit_ttl_days} dias | Gemini multimodal"
+        )
     print()
 
     report = agent.research(
@@ -426,6 +466,10 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
         browser_timeout=args.browser_timeout,
         browser_audit_ttl_days=args.browser_audit_ttl_days,
         refresh_browser_audits=args.refresh_browser_audits,
+        visual_audit=args.visual_audit,
+        visual_audit_limit=args.visual_audit_limit,
+        visual_audit_ttl_days=args.visual_audit_ttl_days,
+        refresh_visual_audits=args.refresh_visual_audits,
     )
 
     print(f"Planner: {report.plan.generated_by}")
@@ -454,6 +498,10 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
         print(f"Browser audits agora:        {report.browser_audits_run}")
         print(f"Browser audits reutilizados: {report.browser_audits_reused}")
         print(f"Falhas de browser audit:     {report.browser_audit_errors}")
+    if args.visual_audit:
+        print(f"Visual audits agora:         {report.visual_audits_run}")
+        print(f"Visual audits reutilizados:  {report.visual_audits_reused}")
+        print(f"Falhas/baixa confiança visual:{report.visual_audit_errors:>3}")
     if not args.no_cache:
         print(f"Cache hits (buscas poupadas): {report.search_cache_hits}")
         print(f"Cache misses (calls reais):   {report.search_cache_misses}")
@@ -524,6 +572,14 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
                 print(f"    Browser findings: {'; '.join(browser.findings[:2])}")
             if browser.mobile_screenshot:
                 print(f"    Mobile screenshot: {browser.mobile_screenshot}")
+        if args.visual_audit and lead.visual_audit is not None:
+            visual = lead.visual_audit
+            print(
+                f"    Visual: {visual.overall_score}/100 | desktop {visual.desktop_score} | "
+                f"mobile {visual.mobile_score} | confiança {visual.confidence:.0%}"
+            )
+            if visual.weaknesses:
+                print(f"    Visual findings: {'; '.join(visual.weaknesses[:2])}")
         if lead.opportunity is not None:
             print(f"    Oferta sugerida: {lead.opportunity.service_fit}")
             if lead.opportunity.reasons:

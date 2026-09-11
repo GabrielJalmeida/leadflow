@@ -132,3 +132,15 @@ Website intelligence is intentionally split into independent layers:
 This prevents `100/100 technical` from being interpreted as `100/100 design`. Browser UX may influence the opportunity type only for objective problems such as severe mobile overflow, missing contact paths or runtime errors. Visual aesthetics remain unresolved until a dedicated visual-review phase.
 
 The browser dependency is optional and loaded lazily. Discovery, entity resolution, investigation, cache, memory and HTTP website auditing do not require Playwright.
+
+## Visual Intelligence boundary
+
+`VisualAuditor` consumes screenshots previously created by `BrowserAuditor` and delegates multimodal analysis to a provider (currently Gemini). It cannot mutate business identity, website ownership, HTTP/TLS facts or browser measurements.
+
+The layer outputs `VisualAudit`, which is subjective and confidence-gated. `Opportunity Intelligence` may use the result only when confidence is sufficient. This keeps the product model explicit:
+
+- Technical Health: protocol/HTML facts.
+- Browser UX: deterministic browser behavior.
+- Visual Quality: subjective multimodal review.
+- Identity Confidence: whether the evidence belongs to the intended business.
+- Opportunity Fit: commercial interpretation of the above for the selected sales goal.

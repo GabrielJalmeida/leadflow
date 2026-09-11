@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import base64
 import json
 import random
 import re
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 from ..http import HTTPError, JsonHttpClient
-from ..models import Evidence, InvestigationCandidate, Lead, QueryPlan, SearchGoal, WebHit, WebsiteStatus
+from ..models import Evidence, InvestigationCandidate, Lead, QueryPlan, SearchGoal, VisualAudit, WebHit, WebsiteStatus
 
 
 class GeminiPlannerProvider:
@@ -76,8 +78,11 @@ class GeminiPlannerProvider:
         return (bool(text), "OK" if text else "Gemini respondeu sem texto.")
 
     def _generate(self, prompt: str, *, max_output_tokens: int = 512) -> dict[str, Any]:
+        return self._generate_parts([{"text": prompt}], max_output_tokens=max_output_tokens)
+
+    def _generate_parts(self, parts: list[dict[str, Any]], *, max_output_tokens: int = 512) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "contents": [{"role": "user", "parts": parts}],
             "generationConfig": {
                 "temperature": 0.2,
                 "maxOutputTokens": max_output_tokens,
@@ -369,6 +374,120 @@ WEB EVIDENCE:
                 break
         return candidates
 
+    def analyze_visual_audit(
+        self,
+        lead: Lead,
+        *,
+        desktop_screenshot: str | Path,
+        mobile_screenshot: str | Path,
+    ) -> VisualAudit:
+        desktop = Path(desktop_screenshot)
+        mobile = Path(mobile_screenshot)
+        desktop_bytes = desktop.read_bytes()
+        mobile_bytes = mobile.read_bytes()
+        total_bytes = len(desktop_bytes) + len(mobile_bytes)
+        if total_bytes > 18 * 1024 * 1024:
+            raise ValueError("visual screenshots exceed the safe 18 MB inline budget")
+
+        prompt = f"""
+You are the visual-review layer of a commercial website research tool.
+You receive TWO screenshots of the same website: desktop first, mobile second.
+Assess ONLY what is visibly supported by the screenshots. Do not infer traffic, sales,
+SEO rankings, backend quality, accessibility compliance, performance, or business identity.
+Do not reward or punish the business category. Evaluate presentation quality relative to a
+professional modern small-business website.
+
+Business label for context only: {lead.name}
+Website: {lead.website or 'unknown'}
+
+Return ONLY valid JSON with this exact shape:
+{{
+  "overall_score": 0,
+  "desktop_score": 0,
+  "mobile_score": 0,
+  "modernity_score": 0,
+  "hierarchy_score": 0,
+  "brand_coherence_score": 0,
+  "readability_score": 0,
+  "conversion_clarity_score": 0,
+  "confidence": 0.0,
+  "strengths": ["..."],
+  "weaknesses": ["..."],
+  "summary": "..."
+}}
+
+Scoring guidance:
+- 90-100: visually excellent/current; only minor polish opportunities.
+- 75-89: strong/professional with some visible room for improvement.
+- 55-74: acceptable but noticeably dated, generic, inconsistent, or weak in hierarchy/conversion clarity.
+- 35-54: significant visible redesign opportunity.
+- 0-34: severely weak/broken-looking presentation.
+
+Rules:
+- Score desktop and mobile independently, then overall as a balanced judgment.
+- modernity_score: visible contemporary visual language, spacing, components, polish.
+- hierarchy_score: clear visual order and scan path.
+- brand_coherence_score: consistency of typography, imagery, colors, visual identity.
+- readability_score: visible legibility, spacing, density, contrast as observable from screenshots.
+- conversion_clarity_score: visible clarity/prominence of next actions; do not claim conversion performance.
+- confidence is 0..1 and should drop when screenshots are incomplete, blocked, mostly blank, cookie-wall dominated, or visually ambiguous.
+- strengths/weaknesses: at most 5 each, concise and evidence-based.
+- Never call a design "bad" or "ugly"; describe visible deficiencies professionally.
+""".strip()
+
+        parts: list[dict[str, Any]] = [
+            {"text": prompt},
+            {"text": "DESKTOP SCREENSHOT:"},
+            {
+                "inline_data": {
+                    "mime_type": _image_mime(desktop),
+                    "data": base64.b64encode(desktop_bytes).decode("ascii"),
+                }
+            },
+            {"text": "MOBILE SCREENSHOT:"},
+            {
+                "inline_data": {
+                    "mime_type": _image_mime(mobile),
+                    "data": base64.b64encode(mobile_bytes).decode("ascii"),
+                }
+            },
+        ]
+        data = self._generate_parts(parts, max_output_tokens=1800)
+        parsed = _extract_json_object(_extract_generate_text(data))
+
+        def score(name: str) -> int:
+            try:
+                return max(0, min(int(round(float(parsed.get(name, 0)))), 100))
+            except (TypeError, ValueError):
+                return 0
+
+        try:
+            confidence = max(0.0, min(float(parsed.get("confidence", 0.0)), 1.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        def strings(name: str) -> list[str]:
+            values = parsed.get(name)
+            if not isinstance(values, list):
+                return []
+            return [str(value).strip()[:240] for value in values if str(value).strip()][:5]
+
+        return VisualAudit(
+            overall_score=score("overall_score"),
+            desktop_score=score("desktop_score"),
+            mobile_score=score("mobile_score"),
+            modernity_score=score("modernity_score"),
+            hierarchy_score=score("hierarchy_score"),
+            brand_coherence_score=score("brand_coherence_score"),
+            readability_score=score("readability_score"),
+            conversion_clarity_score=score("conversion_clarity_score"),
+            confidence=confidence,
+            strengths=strings("strengths"),
+            weaknesses=strings("weaknesses"),
+            summary=str(parsed.get("summary") or "").strip()[:600],
+            model=self.model,
+        )
+
     def plan_queries(self, goal: SearchGoal, *, max_queries: int = 6) -> QueryPlan:
         max_queries = max(2, min(int(max_queries), 10))
         prompt = f"""
@@ -459,3 +578,14 @@ def _extract_json_object(text: str) -> dict[str, Any]:
 
 # Backwards-compatible name for imports from earlier local copies.
 GeminiProvider = GeminiPlannerProvider
+
+
+def _image_mime(path: Path) -> str:
+    suffix = path.suffix.casefold()
+    if suffix == ".png":
+        return "image/png"
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if suffix == ".webp":
+        return "image/webp"
+    raise ValueError(f"unsupported visual-audit image type: {suffix or 'unknown'}")

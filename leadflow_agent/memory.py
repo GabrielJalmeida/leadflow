@@ -132,9 +132,20 @@ class LeadMemory:
             lead.browser_audit = stored.browser_audit
             result.fields_restored += 1
 
+        if (
+            lead.website
+            and stored.website
+            and normalize_domain(lead.website) == normalize_domain(stored.website)
+            and lead.visual_audit is None
+            and stored.visual_audit is not None
+            and _audit_is_recent(stored.visual_audit.analyzed_at, max_age_days=14)
+        ):
+            lead.visual_audit = stored.visual_audit
+            result.fields_restored += 1
+
         # Persist only compact, conclusion-bearing evidence; raw search-result
         # evidence is already handled by the web-search cache.
-        durable_kinds = {"verified_field", "website_not_found", "identity_assessment", "website_audit", "browser_audit"}
+        durable_kinds = {"verified_field", "website_not_found", "identity_assessment", "website_audit", "browser_audit", "visual_audit"}
         existing_evidence = {
             (item.kind, item.target_field, item.url, item.detail)
             for item in lead.evidence

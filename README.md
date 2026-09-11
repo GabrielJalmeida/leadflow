@@ -236,3 +236,17 @@ Useful controls:
 ```
 
 Playwright is optional. The rest of LeadFlow remains usable without installing a browser runtime.
+
+## Phase 6B — Visual Intelligence (optional)
+
+After `--browser-audit` has produced desktop/mobile screenshots, LeadFlow can ask Gemini to review only the visible presentation quality. This is intentionally a separate subjective layer from Technical Health and Browser UX.
+
+```bat
+python -m leadflow_agent search --segment "marcenaria" --city "Praia Grande" --state SP --limit 10 --provider tavily --investigate --investigation-limit 3 --investigation-budget 2 --audit-websites --audit-limit 3 --browser-audit --browser-audit-limit 3 --visual-audit --visual-audit-limit 3
+```
+
+Visual Intelligence reports independent 0–100 dimensions for overall presentation, desktop, mobile, modernity, hierarchy, brand coherence, readability and visible conversion clarity, plus an explicit model confidence. Low-confidence visual reviews are stored for inspection but are not allowed to drive the commercial opportunity type.
+
+Important: a visual score is **not** a purchase probability and is not a technical score. It is an AI-assisted review of the screenshots. Technical Health, Browser UX, Visual Quality, Identity Confidence and Opportunity Fit remain separate signals.
+
+Recent visual audits are reused for 14 days by default. Use `--refresh-visual-audits` to force a new review.

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from leadflow_agent.agent import LeadResearchAgent
 from leadflow_agent.dedupe import lead_key, merge_leads, normalize_text
-from leadflow_agent.models import BrowserAudit, Lead, QueryPlan, SearchGoal, WebHit, WebsiteAudit, WebsiteStatus
+from leadflow_agent.models import BrowserAudit, Lead, QueryPlan, SearchGoal, VisualAudit, WebHit, WebsiteAudit, WebsiteStatus
 from leadflow_agent.scoring import score_lead
 from leadflow_agent.storage import LeadStore
 
@@ -119,8 +119,26 @@ class FakeBrowserAuditor:
             status_code=200,
             ux_score=72,
             visible_contact_cta_count=1,
+            desktop_screenshot="desktop.webp",
+            mobile_screenshot="mobile.webp",
         )
         lead.browser_audit = audit
+        return SimpleNamespace(audit=audit, reused=False)
+
+
+class FakeVisualAuditor:
+    def __init__(self):
+        self.calls = []
+
+    def audit(self, lead, *, max_age_days=14, force=False):
+        from types import SimpleNamespace
+        self.calls.append(lead.name)
+        audit = VisualAudit(
+            overall_score=45, desktop_score=48, mobile_score=42, modernity_score=40,
+            hierarchy_score=50, brand_coherence_score=45, readability_score=65,
+            conversion_clarity_score=35, confidence=0.9,
+        )
+        lead.visual_audit = audit
         return SimpleNamespace(audit=audit, reused=False)
 
 
@@ -262,6 +280,24 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(len(auditor.calls), 1)
         self.assertTrue(any(lead.browser_audit for lead in report.leads))
 
+
+    def test_agent_visual_audit_is_bounded_and_reported(self):
+        provider = FakeLocal()
+        browser = FakeBrowserAuditor()
+        visual = FakeVisualAuditor()
+        agent = LeadResearchAgent(
+            local_search=provider, web_search=provider, llm=FakeLLM(),
+            browser_auditor=browser, visual_auditor=visual,
+        )
+        report = agent.research(
+            SearchGoal(segment="marcenaria", city="Praia Grande", state="SP", limit=3),
+            browser_audit=True, browser_audit_limit=1,
+            visual_audit=True, visual_audit_limit=1,
+        )
+        self.assertEqual(report.visual_audits_run, 1)
+        self.assertEqual(len(visual.calls), 1)
+        self.assertTrue(any(lead.visual_audit for lead in report.leads))
+
     def test_store_persists_report(self):
         provider = FakeLocal()
         agent = LeadResearchAgent(local_search=provider, web_search=provider, llm=FakeLLM())
@@ -282,6 +318,8 @@ class CoreTests(unittest.TestCase):
                 self.assertIn("website_last_audited_at", columns)
                 self.assertIn("browser_ux_score", columns)
                 self.assertIn("browser_last_audited_at", columns)
+                self.assertIn("visual_score", columns)
+                self.assertIn("visual_last_audited_at", columns)
                 self.assertIn("opportunity_type", columns)
                 self.assertIn("opportunity_actionable", columns)
                 self.assertIn("opportunity_service_fit", columns)

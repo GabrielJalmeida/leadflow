@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from leadflow_agent.http import HTTPError
 from leadflow_agent.models import Lead, SearchGoal, WebHit
@@ -128,6 +130,30 @@ class GeminiTests(unittest.TestCase):
         self.assertEqual(candidates[0].city, "Curitiba")
         self.assertEqual(candidates[0].state, "PR")
         self.assertEqual(candidates[0].phone, "(41) 3333-3333")
+
+
+    def test_visual_audit_sends_desktop_and_mobile_images(self):
+        response = {
+            "candidates": [{"content": {"parts": [{"text": '{"overall_score":62,"desktop_score":66,"mobile_score":58,"modernity_score":55,"hierarchy_score":70,"brand_coherence_score":64,"readability_score":75,"conversion_clarity_score":48,"confidence":0.87,"strengths":["boa legibilidade"],"weaknesses":["CTA discreto"],"summary":"visual razoável"}' }]}}]
+        }
+        http = FakeHttp(response=response)
+        provider = GeminiPlannerProvider("abc", http=http)
+        with tempfile.TemporaryDirectory() as tmp:
+            desktop = Path(tmp) / "desktop.webp"
+            mobile = Path(tmp) / "mobile.webp"
+            desktop.write_bytes(b"desktop-image")
+            mobile.write_bytes(b"mobile-image")
+            audit = provider.analyze_visual_audit(
+                Lead(name="Empresa", website="https://example.com"),
+                desktop_screenshot=desktop,
+                mobile_screenshot=mobile,
+            )
+        self.assertEqual(audit.overall_score, 62)
+        self.assertAlmostEqual(audit.confidence, 0.87)
+        payload = http.posts[-1][1]
+        parts = payload["contents"][0]["parts"]
+        self.assertEqual(sum(1 for part in parts if "inline_data" in part), 2)
+        self.assertEqual(parts[2]["inline_data"]["mime_type"], "image/webp")
 
 
 if __name__ == "__main__":

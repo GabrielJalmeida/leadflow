@@ -11,6 +11,7 @@ from .scoring import score_lead
 from .services.investigator import LeadInvestigator
 from .services.website_auditor import WebsiteAuditor
 from .services.browser_auditor import BrowserAuditor
+from .services.visual_auditor import VisualAuditor
 
 
 class LeadResearchAgent:
@@ -25,6 +26,7 @@ class LeadResearchAgent:
         lead_memory: LeadMemory | None = None,
         website_auditor: WebsiteAuditor | None = None,
         browser_auditor: BrowserAuditor | None = None,
+        visual_auditor: VisualAuditor | None = None,
     ):
         if local_search is None and web_search is None:
             raise ValueError("LeadResearchAgent requires a local or web search provider.")
@@ -36,6 +38,7 @@ class LeadResearchAgent:
         self.lead_memory = lead_memory
         self.website_auditor = website_auditor
         self.browser_auditor = browser_auditor
+        self.visual_auditor = visual_auditor
 
     def research(
         self,
@@ -58,6 +61,10 @@ class LeadResearchAgent:
         browser_audit_ttl_days: int = 7,
         refresh_browser_audits: bool = False,
         browser_artifacts_dir: str = "output/browser-audits",
+        visual_audit: bool = False,
+        visual_audit_limit: int | None = 3,
+        visual_audit_ttl_days: int = 14,
+        refresh_visual_audits: bool = False,
     ) -> ResearchReport:
         started = utc_now_iso()
         cache_before = _cache_snapshot(self.web_search)
@@ -262,6 +269,51 @@ class LeadResearchAgent:
                         browser_audit_errors += 1
                         errors.append(f"{lead.name}: browser audit failed: {exc}")
 
+        visual_audits_run = 0
+        visual_audits_reused = 0
+        visual_audit_errors = 0
+        if visual_audit:
+            if self.visual_auditor is None:
+                errors.append("visual audit requested but no visual auditor is configured")
+            else:
+                visual_candidates = [
+                    lead for lead in leads
+                    if lead.website
+                    and lead.browser_audit is not None
+                    and lead.browser_audit.loaded
+                    and lead.browser_audit.desktop_screenshot
+                    and lead.browser_audit.mobile_screenshot
+                ]
+                visual_candidates.sort(
+                    key=lambda item: (
+                        item.identity_confidence,
+                        item.confidence_score,
+                        item.score,
+                    ),
+                    reverse=True,
+                )
+                cap = len(visual_candidates) if visual_audit_limit is None else max(0, int(visual_audit_limit))
+                for lead in visual_candidates[:cap]:
+                    try:
+                        outcome = self.visual_auditor.audit(
+                            lead,
+                            max_age_days=visual_audit_ttl_days,
+                            force=refresh_visual_audits,
+                        )
+                        if outcome.reused:
+                            visual_audits_reused += 1
+                        else:
+                            visual_audits_run += 1
+                        if outcome.audit.confidence < 0.45:
+                            visual_audit_errors += 1
+                            errors.append(
+                                f"{lead.name}: visual audit low confidence "
+                                f"({outcome.audit.confidence:.0%})"
+                            )
+                    except Exception as exc:
+                        visual_audit_errors += 1
+                        errors.append(f"{lead.name}: visual audit failed: {exc}")
+
         # Re-score after enrichment/investigation/audits because verified fields
         # and browser behaviour can materially change the opportunity score.
         for lead in leads:
@@ -313,6 +365,9 @@ class LeadResearchAgent:
             browser_audits_run=browser_audits_run,
             browser_audits_reused=browser_audits_reused,
             browser_audit_errors=browser_audit_errors,
+            visual_audits_run=visual_audits_run,
+            visual_audits_reused=visual_audits_reused,
+            visual_audit_errors=visual_audit_errors,
         )
 
 

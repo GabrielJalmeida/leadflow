@@ -172,6 +172,31 @@ def _service_need(
             cautions.append("estética e posicionamento visual ainda exigem revisão")
             return OpportunityType.OPTIMIZATION, "website_optimization", 34, reasons, cautions
 
+    visual = lead.visual_audit
+    if visual is not None and visual.confidence >= 0.55:
+        if visual.overall_score <= 40:
+            reasons.append(
+                f"visual quality {visual.overall_score}/100: forte oportunidade de redesign +46"
+            )
+            cautions.append(
+                f"avaliação visual por IA com confiança {visual.confidence:.0%}; revisar screenshot antes da abordagem"
+            )
+            return OpportunityType.REDESIGN, "website_redesign", 46, reasons, cautions
+        if visual.overall_score <= 60:
+            reasons.append(
+                f"visual quality {visual.overall_score}/100: apresentação visivelmente defasada/inconsistente +38"
+            )
+            cautions.append(
+                f"avaliação visual por IA com confiança {visual.confidence:.0%}; usar como apoio, não como fato absoluto"
+            )
+            return OpportunityType.REDESIGN, "website_redesign", 38, reasons, cautions
+        if visual.overall_score <= 75:
+            reasons.append(
+                f"visual quality {visual.overall_score}/100: espaço visível para refinamento +27"
+            )
+            cautions.append("oportunidade visual moderada; confirmar manualmente antes do pitch")
+            return OpportunityType.OPTIMIZATION, "website_optimization", 27, reasons, cautions
+
     score = audit.technical_score
     if score <= 30:
         reasons.append(f"website health {score}/100: problemas técnicos severos +50")
@@ -188,7 +213,12 @@ def _service_need(
         return OpportunityType.REVIEW_NEEDED, "visual_review", 20, reasons, cautions
 
     reasons.append(f"website health {score}/100: baseline técnico saudável +10")
-    if browser is not None:
+    if visual is not None and visual.confidence >= 0.55:
+        cautions.append(
+            f"visual quality {visual.overall_score}/100 (confiança {visual.confidence:.0%}); "
+            "site tecnicamente saudável pode ainda ter oportunidade visual"
+        )
+    elif browser is not None:
         cautions.append(f"browser UX {browser.ux_score}/100; estética/branding ainda não foram avaliados")
     else:
         cautions.append("100/100 técnico não mede design, estética, conteúdo ou competitividade")

@@ -141,6 +141,35 @@ class BrowserAudit:
     audited_at: str = field(default_factory=utc_now_iso)
 
 
+
+
+@dataclass(slots=True)
+class VisualAudit:
+    overall_score: int
+    desktop_score: int
+    mobile_score: int
+    modernity_score: int
+    hierarchy_score: int
+    brand_coherence_score: int
+    readability_score: int
+    conversion_clarity_score: int
+    confidence: float = 0.0
+    strengths: list[str] = field(default_factory=list)
+    weaknesses: list[str] = field(default_factory=list)
+    summary: str = ""
+    model: str = ""
+    analyzed_at: str = field(default_factory=utc_now_iso)
+
+    def __post_init__(self) -> None:
+        for name in (
+            "overall_score", "desktop_score", "mobile_score", "modernity_score",
+            "hierarchy_score", "brand_coherence_score", "readability_score",
+            "conversion_clarity_score",
+        ):
+            setattr(self, name, max(0, min(int(getattr(self, name)), 100)))
+        self.confidence = _clamp_confidence(self.confidence)
+
+
 @dataclass(slots=True)
 class OpportunityAssessment:
     type: OpportunityType = OpportunityType.UNKNOWN
@@ -187,6 +216,7 @@ class Lead:
     rejected_candidates: list[RejectedCandidate] = field(default_factory=list)
     website_audit: WebsiteAudit | None = None
     browser_audit: BrowserAudit | None = None
+    visual_audit: VisualAudit | None = None
     opportunity: OpportunityAssessment | None = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
@@ -264,6 +294,9 @@ class ResearchReport:
     browser_audits_run: int = 0
     browser_audits_reused: int = 0
     browser_audit_errors: int = 0
+    visual_audits_run: int = 0
+    visual_audits_reused: int = 0
+    visual_audit_errors: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -292,6 +325,9 @@ class ResearchReport:
             "browser_audits_run": self.browser_audits_run,
             "browser_audits_reused": self.browser_audits_reused,
             "browser_audit_errors": self.browser_audit_errors,
+            "visual_audits_run": self.visual_audits_run,
+            "visual_audits_reused": self.visual_audits_reused,
+            "visual_audit_errors": self.visual_audit_errors,
         }
 
 
@@ -373,6 +409,18 @@ def lead_from_dict(data: dict[str, Any]) -> Lead:
             payload["browser_audit"] = None
     elif not isinstance(browser_audit, BrowserAudit):
         payload["browser_audit"] = None
+
+    visual_audit = payload.get("visual_audit")
+    if isinstance(visual_audit, dict):
+        allowed = {field_.name for field_ in fields(VisualAudit)}
+        try:
+            payload["visual_audit"] = VisualAudit(
+                **{key: value for key, value in visual_audit.items() if key in allowed}
+            )
+        except (TypeError, ValueError):
+            payload["visual_audit"] = None
+    elif not isinstance(visual_audit, VisualAudit):
+        payload["visual_audit"] = None
 
     allowed_lead = {field_.name for field_ in fields(Lead)}
     clean = {key: value for key, value in payload.items() if key in allowed_lead}

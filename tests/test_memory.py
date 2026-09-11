@@ -17,6 +17,7 @@ from leadflow_agent.models import (
     SearchGoal,
     WebsiteAudit,
     WebsiteStatus,
+    VisualAudit,
 )
 from leadflow_agent.storage import LeadStore
 
@@ -240,6 +241,30 @@ class MemoryTests(unittest.TestCase):
             )
             LeadMemory(db).hydrate(current)
             self.assertEqual(current.website_status, WebsiteStatus.UNKNOWN)
+
+
+    def test_recent_visual_audit_is_restored_for_same_domain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = str(Path(tmp) / "leadflow.db")
+            stored = Lead(
+                name="Empresa Visual Auditada", city="Praia Grande", state="SP",
+                provider_url="https://instagram.com/empresa-visual",
+                website="https://empresa.example", field_confidence={"website": 0.95},
+                visual_audit=VisualAudit(
+                    overall_score=58, desktop_score=60, mobile_score=56, modernity_score=50,
+                    hierarchy_score=62, brand_coherence_score=60, readability_score=70,
+                    conversion_clarity_score=45, confidence=0.86,
+                ),
+            )
+            self._save(db, stored)
+            current = Lead(
+                name="Empresa Visual Auditada", city="Praia Grande", state="SP",
+                provider_url="https://instagram.com/empresa-visual", website="https://empresa.example",
+            )
+            result = LeadMemory(db).hydrate(current)
+            self.assertTrue(result.matched)
+            self.assertIsNotNone(current.visual_audit)
+            self.assertEqual(current.visual_audit.overall_score, 58)
 
 
 if __name__ == "__main__":

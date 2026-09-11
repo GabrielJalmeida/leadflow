@@ -88,3 +88,12 @@
 - Adds SSRF-oriented request routing so browser requests to localhost/private/non-public addresses are aborted.
 - Browser UX can upgrade a technically healthy website into `REDESIGN` or `OPTIMIZATION` when objective mobile/conversion friction is detected.
 - Playwright remains an optional dependency; normal discovery/investigation/HTTP audit still works without it.
+
+## 0.1.4-dev — Phase 6B Visual Intelligence
+
+- Added optional Gemini multimodal visual review over desktop/mobile browser screenshots.
+- Added separate visual quality dimensions: overall, desktop, mobile, modernity, hierarchy, brand coherence, readability and conversion clarity.
+- Added explicit visual-confidence gating; low-confidence AI review cannot drive opportunity scoring.
+- Added persistent visual-audit memory (14-day default) and SQLite/CSV/JSON fields.
+- Opportunity Intelligence can now identify redesign opportunities even when technical/browser checks are healthy.
+- Visual analysis never changes business identity or technical audit facts.

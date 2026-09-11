@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS leads (
     website_last_audited_at TEXT,
     browser_ux_score INTEGER,
     browser_last_audited_at TEXT,
+    visual_score INTEGER,
+    visual_last_audited_at TEXT,
     score INTEGER NOT NULL DEFAULT 0,
     source_provider TEXT,
     payload_json TEXT NOT NULL,
@@ -104,6 +106,10 @@ class LeadStore:
             self.conn.execute("ALTER TABLE leads ADD COLUMN browser_ux_score INTEGER")
         if "browser_last_audited_at" not in columns:
             self.conn.execute("ALTER TABLE leads ADD COLUMN browser_last_audited_at TEXT")
+        if "visual_score" not in columns:
+            self.conn.execute("ALTER TABLE leads ADD COLUMN visual_score INTEGER")
+        if "visual_last_audited_at" not in columns:
+            self.conn.execute("ALTER TABLE leads ADD COLUMN visual_last_audited_at TEXT")
         self.conn.commit()
 
     def close(self) -> None:
@@ -135,9 +141,9 @@ class LeadStore:
                     website, website_status, identity_status, identity_confidence,
                     address, confidence_score, opportunity_type, opportunity_actionable,
                     opportunity_service_fit, website_audit_score, website_last_audited_at,
-                    browser_ux_score, browser_last_audited_at,
+                    browser_ux_score, browser_last_audited_at, visual_score, visual_last_audited_at,
                     score, source_provider, payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(lead_key) DO UPDATE SET
                     name=excluded.name,
                     city=excluded.city,
@@ -165,6 +171,8 @@ class LeadStore:
                     website_last_audited_at=COALESCE(excluded.website_last_audited_at, leads.website_last_audited_at),
                     browser_ux_score=COALESCE(excluded.browser_ux_score, leads.browser_ux_score),
                     browser_last_audited_at=COALESCE(excluded.browser_last_audited_at, leads.browser_last_audited_at),
+                    visual_score=COALESCE(excluded.visual_score, leads.visual_score),
+                    visual_last_audited_at=COALESCE(excluded.visual_last_audited_at, leads.visual_last_audited_at),
                     score=excluded.score,
                     source_provider=excluded.source_provider,
                     payload_json=excluded.payload_json,
@@ -182,6 +190,8 @@ class LeadStore:
                     lead.website_audit.audited_at if lead.website_audit else None,
                     lead.browser_audit.ux_score if lead.browser_audit else None,
                     lead.browser_audit.audited_at if lead.browser_audit else None,
+                    lead.visual_audit.overall_score if lead.visual_audit else None,
+                    lead.visual_audit.analyzed_at if lead.visual_audit else None,
                     lead.score, lead.source_provider, payload,
                 ),
             )
