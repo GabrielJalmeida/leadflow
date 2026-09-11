@@ -83,6 +83,31 @@ class RejectedCandidate:
     rejected_at: str = field(default_factory=utc_now_iso)
 
 
+
+
+@dataclass(slots=True)
+class WebsiteAudit:
+    requested_url: str
+    final_url: str
+    reachable: bool
+    blocked: bool = False
+    status_code: int | None = None
+    response_time_ms: int | None = None
+    redirect_count: int = 0
+    content_type: str = ""
+    uses_https: bool = False
+    title: str | None = None
+    has_meta_description: bool = False
+    has_viewport: bool = False
+    form_count: int = 0
+    has_whatsapp: bool = False
+    has_tel_link: bool = False
+    has_email_link: bool = False
+    technical_score: int = 0
+    findings: list[str] = field(default_factory=list)
+    error: str | None = None
+    audited_at: str = field(default_factory=utc_now_iso)
+
 @dataclass(slots=True)
 class Lead:
     name: str
@@ -113,6 +138,7 @@ class Lead:
     score_reasons: list[str] = field(default_factory=list)
     evidence: list[Evidence] = field(default_factory=list)
     rejected_candidates: list[RejectedCandidate] = field(default_factory=list)
+    website_audit: WebsiteAudit | None = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
@@ -183,6 +209,9 @@ class ResearchReport:
     memory_rejections_restored: int = 0
     quality_rejected: int = 0
     invalid_fields_removed: int = 0
+    website_audits_run: int = 0
+    website_audits_reused: int = 0
+    website_audit_errors: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -205,6 +234,9 @@ class ResearchReport:
             "memory_rejections_restored": self.memory_rejections_restored,
             "quality_rejected": self.quality_rejected,
             "invalid_fields_removed": self.invalid_fields_removed,
+            "website_audits_run": self.website_audits_run,
+            "website_audits_reused": self.website_audits_reused,
+            "website_audit_errors": self.website_audit_errors,
         }
 
 
@@ -245,6 +277,18 @@ def lead_from_dict(data: dict[str, Any]) -> Lead:
         except TypeError:
             continue
     payload["rejected_candidates"] = rejected
+
+    audit = payload.get("website_audit")
+    if isinstance(audit, dict):
+        allowed = {field_.name for field_ in fields(WebsiteAudit)}
+        try:
+            payload["website_audit"] = WebsiteAudit(
+                **{key: value for key, value in audit.items() if key in allowed}
+            )
+        except TypeError:
+            payload["website_audit"] = None
+    elif not isinstance(audit, WebsiteAudit):
+        payload["website_audit"] = None
 
     allowed_lead = {field_.name for field_ in fields(Lead)}
     clean = {key: value for key, value in payload.items() if key in allowed_lead}

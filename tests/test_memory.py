@@ -14,6 +14,7 @@ from leadflow_agent.models import (
     RejectedCandidate,
     ResearchReport,
     SearchGoal,
+    WebsiteAudit,
     WebsiteStatus,
 )
 from leadflow_agent.storage import LeadStore
@@ -144,6 +145,38 @@ class MemoryTests(unittest.TestCase):
             result = LeadMemory(db).hydrate(current)
             self.assertTrue(result.matched)
             self.assertEqual(current.website_status, WebsiteStatus.NOT_FOUND)
+
+    def test_recent_website_audit_is_restored_for_same_domain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = str(Path(tmp) / "leadflow.db")
+            stored = Lead(
+                name="Empresa Auditada",
+                city="Praia Grande",
+                state="SP",
+                provider_url="https://instagram.com/empresa-auditada",
+                website="https://empresa.example",
+                field_confidence={"website": 0.95},
+                website_audit=WebsiteAudit(
+                    requested_url="https://empresa.example",
+                    final_url="https://empresa.example",
+                    reachable=True,
+                    status_code=200,
+                    uses_https=True,
+                    technical_score=90,
+                ),
+            )
+            self._save(db, stored)
+            current = Lead(
+                name="Empresa Auditada",
+                city="Praia Grande",
+                state="SP",
+                provider_url="https://instagram.com/empresa-auditada",
+                website="https://empresa.example",
+            )
+            result = LeadMemory(db).hydrate(current)
+            self.assertTrue(result.matched)
+            self.assertIsNotNone(current.website_audit)
+            self.assertEqual(current.website_audit.technical_score, 90)
 
     def test_stale_not_found_state_returns_to_unknown(self):
         with tempfile.TemporaryDirectory() as tmp:

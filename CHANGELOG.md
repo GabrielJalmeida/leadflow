@@ -56,3 +56,15 @@
 - Invalid Brazilian phone shapes are removed before dedupe/storage and again after memory hydration.
 - Basic planner fallback now uses useful woodworking synonyms for `marcenaria` instead of low-value `empresa/profissional` suffixes.
 - Research reports expose rejected-candidate and invalid-field counters.
+
+## v0.1.4-dev — Phase 4: Website Verification & Audit Engine
+
+- Added opt-in, local website auditing with `--audit-websites`.
+- Audit does not consume Tavily/Gemini credits; it performs a bounded HTTP GET against the known website.
+- Added SSRF-oriented safety guardrails: only public HTTP/HTTPS targets are allowed and every redirect is revalidated.
+- Added objective static signals: HTTP status, HTTPS, redirect count, response time, title, meta description, viewport, forms and contact links (WhatsApp/tel/mailto).
+- Added a conservative 0–100 technical readiness score; it is stored separately and does not yet change the commercial opportunity score.
+- Added audit persistence in lead payloads and SQLite query columns, with 7-day memory reuse by default.
+- Added `--audit-limit`, `--audit-timeout`, `--audit-ttl-days` and `--refresh-audits`.
+- Added CSV/JSON audit fields and terminal summaries.
+- Added unit coverage for public/private URL validation, unreachable sites, safety blocking, signal extraction and memory reuse.

@@ -28,7 +28,9 @@ def export_report(report: ResearchReport, output_dir: str = "output") -> tuple[P
         writer = csv.DictWriter(
             handle,
             fieldnames=[
-                "score", "confidence_score", "name", "phone", "email", "website", "website_status", "socials", "address",
+                "score", "confidence_score", "name", "phone", "email", "website", "website_status",
+                "website_audit_score", "website_http_status", "website_https", "website_response_ms",
+                "website_findings", "socials", "address",
                 "city", "state", "categories", "rating", "review_count", "source_provider",
                 "discovered_query", "score_reasons",
             ],
@@ -44,6 +46,11 @@ def export_report(report: ResearchReport, output_dir: str = "output") -> tuple[P
                     "email": lead.email or "",
                     "website": lead.website or "",
                     "website_status": lead.website_status.value,
+                    "website_audit_score": lead.website_audit.technical_score if lead.website_audit else "",
+                    "website_http_status": lead.website_audit.status_code if lead.website_audit and lead.website_audit.status_code is not None else "",
+                    "website_https": lead.website_audit.uses_https if lead.website_audit else "",
+                    "website_response_ms": lead.website_audit.response_time_ms if lead.website_audit and lead.website_audit.response_time_ms is not None else "",
+                    "website_findings": " | ".join(lead.website_audit.findings) if lead.website_audit else "",
                     "socials": " | ".join(lead.socials),
                     "address": lead.address or "",
                     "city": lead.city,

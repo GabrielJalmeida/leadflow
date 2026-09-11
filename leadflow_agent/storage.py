@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS leads (
     identity_confidence REAL NOT NULL DEFAULT 0,
     address TEXT,
     confidence_score INTEGER NOT NULL DEFAULT 0,
+    website_audit_score INTEGER,
+    website_last_audited_at TEXT,
     score INTEGER NOT NULL DEFAULT 0,
     source_provider TEXT,
     payload_json TEXT NOT NULL,
@@ -83,6 +85,10 @@ class LeadStore:
             self.conn.execute(
                 "ALTER TABLE leads ADD COLUMN confidence_score INTEGER NOT NULL DEFAULT 0"
             )
+        if "website_audit_score" not in columns:
+            self.conn.execute("ALTER TABLE leads ADD COLUMN website_audit_score INTEGER")
+        if "website_last_audited_at" not in columns:
+            self.conn.execute("ALTER TABLE leads ADD COLUMN website_last_audited_at TEXT")
         self.conn.commit()
 
     def close(self) -> None:
@@ -112,8 +118,9 @@ class LeadStore:
                 INSERT INTO leads (
                     lead_key, name, city, state, country, phone, email,
                     website, website_status, identity_status, identity_confidence,
-                    address, confidence_score, score, source_provider, payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    address, confidence_score, website_audit_score, website_last_audited_at,
+                    score, source_provider, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(lead_key) DO UPDATE SET
                     name=excluded.name,
                     city=excluded.city,
@@ -134,6 +141,8 @@ class LeadStore:
                     identity_confidence=MAX(excluded.identity_confidence, leads.identity_confidence),
                     address=COALESCE(excluded.address, leads.address),
                     confidence_score=MAX(excluded.confidence_score, leads.confidence_score),
+                    website_audit_score=COALESCE(excluded.website_audit_score, leads.website_audit_score),
+                    website_last_audited_at=COALESCE(excluded.website_last_audited_at, leads.website_last_audited_at),
                     score=excluded.score,
                     source_provider=excluded.source_provider,
                     payload_json=excluded.payload_json,
@@ -143,7 +152,10 @@ class LeadStore:
                     key, lead.name, lead.city, lead.state, lead.country, lead.phone,
                     lead.email, lead.website, lead.website_status.value,
                     lead.identity_status.value, lead.identity_confidence, lead.address,
-                    lead.confidence_score, lead.score, lead.source_provider, payload,
+                    lead.confidence_score,
+                    lead.website_audit.technical_score if lead.website_audit else None,
+                    lead.website_audit.audited_at if lead.website_audit else None,
+                    lead.score, lead.source_provider, payload,
                 ),
             )
             self.conn.execute(

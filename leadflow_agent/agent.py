@@ -9,6 +9,7 @@ from .quality import assess_lead_quality, sanitize_lead_fields
 from .providers.base import LeadExtractorProvider, LLMProvider, LocalSearchProvider, WebSearchProvider
 from .scoring import score_lead
 from .services.investigator import LeadInvestigator
+from .services.website_auditor import WebsiteAuditor
 
 
 class LeadResearchAgent:
@@ -21,6 +22,7 @@ class LeadResearchAgent:
         lead_extractor: LeadExtractorProvider | None = None,
         investigator: LeadInvestigator | None = None,
         lead_memory: LeadMemory | None = None,
+        website_auditor: WebsiteAuditor | None = None,
     ):
         if local_search is None and web_search is None:
             raise ValueError("LeadResearchAgent requires a local or web search provider.")
@@ -30,6 +32,7 @@ class LeadResearchAgent:
         self.lead_extractor = lead_extractor
         self.investigator = investigator
         self.lead_memory = lead_memory
+        self.website_auditor = website_auditor
 
     def research(
         self,
@@ -41,6 +44,11 @@ class LeadResearchAgent:
         investigate: bool = False,
         investigation_limit: int | None = None,
         investigation_budget: int = 2,
+        audit_websites: bool = False,
+        audit_limit: int | None = 3,
+        audit_timeout: float = 8.0,
+        audit_ttl_days: int = 7,
+        refresh_audits: bool = False,
     ) -> ResearchReport:
         started = utc_now_iso()
         cache_before = _cache_snapshot(self.web_search)
@@ -174,8 +182,43 @@ class LeadResearchAgent:
                     except Exception as exc:
                         errors.append(f"{lead.name}: investigation failed: {exc}")
 
-        # Re-score after enrichment/investigation because verified fields and a
-        # NOT_FOUND website state can materially change the opportunity score.
+        website_audits_run = 0
+        website_audits_reused = 0
+        website_audit_errors = 0
+        if audit_websites:
+            if self.website_auditor is None:
+                errors.append("website audit requested but no auditor is configured")
+            else:
+                audit_candidates = [lead for lead in leads if lead.website]
+                audit_candidates.sort(
+                    key=lambda item: (
+                        item.identity_confidence,
+                        item.confidence_score,
+                        item.score,
+                    ),
+                    reverse=True,
+                )
+                cap = len(audit_candidates) if audit_limit is None else max(0, int(audit_limit))
+                for lead in audit_candidates[:cap]:
+                    try:
+                        outcome = self.website_auditor.audit(
+                            lead,
+                            timeout=audit_timeout,
+                            max_age_days=audit_ttl_days,
+                            force=refresh_audits,
+                        )
+                        if outcome.reused:
+                            website_audits_reused += 1
+                        else:
+                            website_audits_run += 1
+                        if outcome.audit.error or outcome.audit.blocked:
+                            website_audit_errors += 1
+                    except Exception as exc:
+                        website_audit_errors += 1
+                        errors.append(f"{lead.name}: website audit failed: {exc}")
+
+        # Re-score after enrichment/investigation/audit because verified fields
+        # and website availability can materially change the opportunity score.
         for lead in leads:
             score_lead(lead, prefer_no_website=goal.prefer_no_website)
 
@@ -217,6 +260,9 @@ class LeadResearchAgent:
             memory_rejections_restored=memory_rejections_restored,
             quality_rejected=quality_rejected,
             invalid_fields_removed=invalid_fields_removed,
+            website_audits_run=website_audits_run,
+            website_audits_reused=website_audits_reused,
+            website_audit_errors=website_audit_errors,
         )
 
 

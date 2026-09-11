@@ -6,7 +6,7 @@ from pathlib import Path
 
 from leadflow_agent.agent import LeadResearchAgent
 from leadflow_agent.dedupe import lead_key, merge_leads, normalize_text
-from leadflow_agent.models import Lead, QueryPlan, SearchGoal, WebHit, WebsiteStatus
+from leadflow_agent.models import Lead, QueryPlan, SearchGoal, WebHit, WebsiteAudit, WebsiteStatus
 from leadflow_agent.scoring import score_lead
 from leadflow_agent.storage import LeadStore
 
@@ -82,6 +82,25 @@ class FakeInvestigator:
         from types import SimpleNamespace
         self.calls.append((lead.name, max_searches))
         return SimpleNamespace(searches_used=max_searches, errors=[])
+
+
+class FakeWebsiteAuditor:
+    def __init__(self):
+        self.calls = []
+
+    def audit(self, lead, *, timeout=8.0, max_age_days=7, force=False):
+        from types import SimpleNamespace
+        self.calls.append(lead.name)
+        audit = WebsiteAudit(
+            requested_url=lead.website,
+            final_url=lead.website,
+            reachable=True,
+            status_code=200,
+            uses_https=True,
+            technical_score=85,
+        )
+        lead.website_audit = audit
+        return SimpleNamespace(audit=audit, reused=False)
 
 
 class CoreTests(unittest.TestCase):
@@ -179,6 +198,24 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(report.investigation_searches, 4)
         self.assertEqual(len(investigator.calls), 2)
 
+    def test_agent_website_audit_is_bounded_and_reported(self):
+        provider = FakeLocal()
+        auditor = FakeWebsiteAuditor()
+        agent = LeadResearchAgent(
+            local_search=provider,
+            web_search=provider,
+            llm=FakeLLM(),
+            website_auditor=auditor,
+        )
+        report = agent.research(
+            SearchGoal(segment="marcenaria", city="Praia Grande", state="SP", limit=3),
+            audit_websites=True,
+            audit_limit=1,
+        )
+        self.assertEqual(report.website_audits_run, 1)
+        self.assertEqual(len(auditor.calls), 1)
+        self.assertTrue(any(lead.website_audit for lead in report.leads))
+
     def test_store_persists_report(self):
         provider = FakeLocal()
         agent = LeadResearchAgent(local_search=provider, web_search=provider, llm=FakeLLM())
@@ -195,6 +232,8 @@ class CoreTests(unittest.TestCase):
                 self.assertIn("confidence_score", columns)
                 self.assertIn("identity_status", columns)
                 self.assertIn("identity_confidence", columns)
+                self.assertIn("website_audit_score", columns)
+                self.assertIn("website_last_audited_at", columns)
             finally:
                 store.close()
 

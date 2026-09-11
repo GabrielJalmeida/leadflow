@@ -17,6 +17,7 @@ from .providers.outscraper import OutscraperSearchProvider
 from .providers.tavily import TavilySearchProvider
 from .storage import LeadStore
 from .services.investigator import LeadInvestigator
+from .services.website_auditor import WebsiteAuditor
 
 
 VERSION = "0.1.4-dev"
@@ -81,6 +82,34 @@ def _parser() -> argparse.ArgumentParser:
         "--no-memory",
         action="store_true",
         help="Não reutiliza campos/rejeições verificados em pesquisas anteriores.",
+    )
+    search.add_argument(
+        "--audit-websites",
+        action="store_true",
+        help="Audita tecnicamente sites encontrados sem consumir Tavily/Gemini.",
+    )
+    search.add_argument(
+        "--audit-limit",
+        type=int,
+        default=3,
+        help="Máximo de sites auditados nesta execução (default: 3).",
+    )
+    search.add_argument(
+        "--audit-timeout",
+        type=float,
+        default=8.0,
+        help="Timeout por site em segundos, de 2 a 20 (default: 8).",
+    )
+    search.add_argument(
+        "--audit-ttl-days",
+        type=int,
+        default=7,
+        help="Validade de uma auditoria salva, de 1 a 30 dias (default: 7).",
+    )
+    search.add_argument(
+        "--refresh-audits",
+        action="store_true",
+        help="Refaz auditorias mesmo quando existe resultado recente em memória.",
     )
     search.add_argument("--no-ai", action="store_true", help="Desliga Gemini; Tavily usa extração heurística conservadora.")
     search.add_argument(
@@ -210,6 +239,7 @@ def _build_agent(
             lead_extractor=llm,
             investigator=investigator,
             lead_memory=memory,
+            website_auditor=WebsiteAuditor(),
         )
 
     if provider_name == "outscraper" or (provider_name == "auto" and settings.outscraper_api_key):
@@ -227,6 +257,7 @@ def _build_agent(
             llm=llm,
             investigator=investigator,
             lead_memory=memory,
+            website_auditor=WebsiteAuditor(),
         )
 
     if provider_name == "brave" or (provider_name == "auto" and settings.brave_api_key):
@@ -241,6 +272,7 @@ def _build_agent(
             llm=llm,
             investigator=investigator,
             lead_memory=memory,
+            website_auditor=WebsiteAuditor(),
         )
 
     raise RuntimeError("Nenhum provider de busca configurado. Rode `python -m leadflow_agent setup`.")
@@ -255,6 +287,15 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
         return 2
     if args.investigation_limit < 0:
         print("--investigation-limit não pode ser negativo.", file=sys.stderr)
+        return 2
+    if args.audit_limit < 0:
+        print("--audit-limit não pode ser negativo.", file=sys.stderr)
+        return 2
+    if args.audit_timeout < 2 or args.audit_timeout > 20:
+        print("--audit-timeout deve ficar entre 2 e 20 segundos.", file=sys.stderr)
+        return 2
+    if args.audit_ttl_days < 1 or args.audit_ttl_days > 30:
+        print("--audit-ttl-days deve ficar entre 1 e 30.", file=sys.stderr)
         return 2
     if args.cache_ttl_days < 1 or args.cache_ttl_days > 90:
         print("--cache-ttl-days deve ficar entre 1 e 90.", file=sys.stderr)
@@ -312,6 +353,11 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
             f"Investigator: ATIVO — até {possible} leads × {args.investigation_budget} buscas "
             f"(máximo {max_searches} buscas extras)"
         )
+    if args.audit_websites:
+        print(
+            f"Website audit: ATIVO — até {args.audit_limit} sites | "
+            f"TTL {args.audit_ttl_days} dias | timeout {args.audit_timeout:g}s"
+        )
     print()
 
     report = agent.research(
@@ -322,6 +368,11 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
         investigate=args.investigate,
         investigation_limit=args.investigation_limit,
         investigation_budget=args.investigation_budget,
+        audit_websites=args.audit_websites,
+        audit_limit=args.audit_limit,
+        audit_timeout=args.audit_timeout,
+        audit_ttl_days=args.audit_ttl_days,
+        refresh_audits=args.refresh_audits,
     )
 
     print(f"Planner: {report.plan.generated_by}")
@@ -342,6 +393,10 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
     if args.investigate:
         print(f"Leads investigados:        {report.investigated_leads}")
         print(f"Buscas de investigação:    {report.investigation_searches}")
+    if args.audit_websites:
+        print(f"Sites auditados agora:      {report.website_audits_run}")
+        print(f"Auditorias reutilizadas:    {report.website_audits_reused}")
+        print(f"Falhas/bloqueios de audit:  {report.website_audit_errors}")
     if not args.no_cache:
         print(f"Cache hits (buscas poupadas): {report.search_cache_hits}")
         print(f"Cache misses (calls reais):   {report.search_cache_misses}")
@@ -387,6 +442,16 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
                 f"({lead.identity_confidence:.0%}) | "
                 f"site: {lead.website_status.value}"
             )
+        if args.audit_websites and lead.website_audit is not None:
+            audit = lead.website_audit
+            status = audit.status_code if audit.status_code is not None else "-"
+            latency = f"{audit.response_time_ms}ms" if audit.response_time_ms is not None else "-"
+            print(
+                f"    Audit: {audit.technical_score}/100 | HTTP {status} | "
+                f"HTTPS {'sim' if audit.uses_https else 'não'} | {latency}"
+            )
+            if audit.findings:
+                print(f"    Audit findings: {'; '.join(audit.findings[:2])}")
         print(f"    via: {lead.discovered_query}")
 
     csv_path, json_path = export_report(report)

@@ -110,9 +110,20 @@ class LeadMemory:
             lead.identity_confidence = stored.identity_confidence
             lead.identity_status = stored.identity_status
 
+        if (
+            lead.website
+            and stored.website
+            and normalize_domain(lead.website) == normalize_domain(stored.website)
+            and lead.website_audit is None
+            and stored.website_audit is not None
+            and _audit_is_recent(stored.website_audit.audited_at, max_age_days=7)
+        ):
+            lead.website_audit = stored.website_audit
+            result.fields_restored += 1
+
         # Persist only compact, conclusion-bearing evidence; raw search-result
         # evidence is already handled by the web-search cache.
-        durable_kinds = {"verified_field", "website_not_found", "identity_assessment"}
+        durable_kinds = {"verified_field", "website_not_found", "identity_assessment", "website_audit"}
         existing_evidence = {
             (item.kind, item.target_field, item.url, item.detail)
             for item in lead.evidence
@@ -236,3 +247,10 @@ def _parse_iso(value: str) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _audit_is_recent(value: str, *, max_age_days: int) -> bool:
+    observed = _parse_iso(value)
+    if observed is None:
+        return False
+    return observed >= (_utc_now() - timedelta(days=max_age_days))

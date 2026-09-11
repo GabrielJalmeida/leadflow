@@ -158,3 +158,26 @@ Each run can produce:
 ## Security
 
 Never commit `.env`. Never paste API keys into issues, screenshots, README files or chat logs.
+
+## Website audit (Phase 4)
+
+LeadFlow can now audit websites already associated with discovered leads without spending search or LLM credits:
+
+```bat
+python -m leadflow_agent search --segment "marcenaria" --city "Praia Grande" --state SP --limit 10 --provider tavily --investigate --audit-websites --audit-limit 3
+```
+
+The lightweight local audit records objective signals such as HTTP status, HTTPS, redirects, response time, `<title>`, meta description, viewport, forms and WhatsApp/tel/mailto links. It intentionally does **not** treat a reachable domain as proof that the domain belongs to the business; identity resolution remains a separate responsibility.
+
+Safety limits are built in: only public HTTP/HTTPS targets are allowed, local/private/link-local addresses are blocked, redirect targets are revalidated, the response body is capped, and each request has a timeout.
+
+Useful options:
+
+```text
+--audit-limit 3        maximum websites audited in the run
+--audit-timeout 8      per-site timeout (2–20 seconds)
+--audit-ttl-days 7     reuse a recent saved audit
+--refresh-audits       force a fresh HTTP audit
+```
+
+The current `technical_score` is a transparent static-readiness indicator, not an SEO/Lighthouse score and not yet part of the commercial Opportunity Score. A browser-based deep audit can be added later as an optional provider/service.

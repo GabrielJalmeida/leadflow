@@ -107,3 +107,9 @@ Discovery and investigation have separate budgets. A normal discovery run does n
 3. add persistent investigation cache so repeated runs can reuse evidence and rejected candidates;
 4. add website reachability/quality audit;
 5. only then freeze the backend API contract and build the frontend.
+
+## Website Verification & Audit Engine
+
+`services/website_auditor.py` is deliberately independent from discovery and entity resolution. It receives a website already attached to a lead and performs a bounded, static HTTP audit. It cannot increase identity confidence merely because a domain responds.
+
+The fetcher manually handles redirects so every redirect target can be checked before access. Localhost, RFC1918/private, link-local, loopback, reserved and other non-global IP targets are blocked to reduce SSRF risk in the local desktop application. Audit results are persisted as part of the lead payload and can be reused from LeadMemory while fresh.
