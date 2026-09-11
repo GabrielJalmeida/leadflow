@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from ..models import Lead, QueryPlan, SearchGoal, WebHit
+from ..models import InvestigationCandidate, Lead, QueryPlan, SearchGoal, WebHit
 
 
 class LocalSearchProvider(Protocol):
@@ -21,6 +21,23 @@ class LeadExtractorProvider(Protocol):
     name: str
 
     def extract_leads(self, hits: list[WebHit], goal: SearchGoal, *, query: str, max_leads: int = 20) -> list[Lead]: ...
+
+
+
+
+class LeadInvestigationExtractorProvider(Protocol):
+    name: str
+
+    def extract_investigation_candidates(
+        self,
+        hits: list[WebHit],
+        lead: Lead,
+        goal: SearchGoal,
+        *,
+        query: str,
+        purpose: str,
+        max_candidates: int = 12,
+    ) -> list[InvestigationCandidate]: ...
 
 
 class LLMProvider(Protocol):

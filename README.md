@@ -71,15 +71,76 @@ Extraction is evidence-only: it is instructed not to invent company names, conta
 
 If Gemini is unavailable or rate-limited, Tavily has a conservative heuristic fallback for direct business/social results. Directory/list pages are deliberately skipped in this fallback because they require semantic extraction to avoid false leads.
 
-## Enrichment
+## Lead Investigator
 
-After discovery works, optional per-lead enrichment can run additional web searches:
+Discovery answers **which businesses exist**. The Investigator answers **which facts actually belong to each business**. It is opt-in because each investigated lead may spend additional search credits.
+
+Recommended first test:
 
 ```bat
-python -m leadflow_agent search --segment "marcenaria" --city "Praia Grande" --state SP --limit 10 --provider tavily --enrich-web --enrichment-limit 5
+python -m leadflow_agent search --segment "marcenaria" --city "Praia Grande" --state SP --limit 10 --provider tavily --investigate --investigation-limit 3 --investigation-budget 2
 ```
 
-This can consume additional search credits, so it is disabled by default.
+With that command the maximum extra search cost is explicit: `3 leads × 2 searches = 6` Tavily searches, in addition to discovery. The default investigation budget is capped at three searches per lead.
+
+The Investigator:
+
+1. searches contact/social evidence;
+2. searches specifically for an official website/address;
+3. asks Gemini to extract observed candidates without replacing observed locality with the requested city;
+4. passes every candidate through entity resolution;
+5. accepts only `MATCHED` / high-confidence `PROBABLE_MATCH` evidence;
+6. remembers mismatches such as a same-name company in another state;
+7. can mark `WebsiteStatus.NOT_FOUND` only after a bounded dedicated investigation.
+
+`NOT_FOUND` means *LeadFlow investigated and did not identify an official website*. It is intentionally not a claim that no website can possibly exist.
+
+### Phone hygiene
+
+The Investigator applies structural phone validation before treating a number as usable. For Brazil it recognizes normal 10-digit fixed lines and 11-digit mobile numbers and rejects obvious truncated mobile-like values. This validation does **not** prove a number is active; active-number verification is a later concern.
+
+### Legacy enrichment
+
+`--enrich-web` is still available for compatibility, but the new `--investigate` path is the preferred architecture because it uses explicit identity resolution and a visible per-lead budget.
+
+## Persistent research cache
+
+LeadFlow now treats provider quota as a first-class engineering constraint. Web-search responses are cached in the same local SQLite database before another provider call is made. The default TTL is 14 days.
+
+```bat
+python -m leadflow_agent search --segment "marcenaria" --city "Praia Grande" --state SP --limit 10 --provider tavily
+```
+
+Repeating the same search can reuse cached evidence instead of spending another Tavily search. The terminal reports:
+
+- `Cache hits`: provider calls avoided;
+- `Cache misses`: real web-search calls;
+- `Entradas gravadas`: refreshed/new cache entries.
+
+Controls:
+
+```bat
+--cache-ttl-days 14
+--refresh-cache
+--no-cache
+```
+
+`--refresh-cache` deliberately bypasses old entries and writes fresh results. `--no-cache` disables search caching entirely for the run.
+
+## Persistent lead memory
+
+Search-result caching and business memory are intentionally separate. Cached pages are only evidence; verified conclusions are restored from previous leads only when LeadFlow can establish a durable identity anchor such as the same provider URL/ID, phone, domain or social profile. **Same name + same city alone is not sufficient.**
+
+The memory layer can reuse:
+
+- previously verified phone/site/social/address fields;
+- recent `WebsiteStatus.NOT_FOUND` conclusions (30-day freshness window);
+- rejected website/social candidates for up to 180 days;
+- compact identity/field evidence.
+
+This lets a repeat run remember that a Curitiba website was already rejected for a Praia Grande company without turning a name collision into shared data. Use `--no-memory` when a completely fresh identity investigation is required.
+
+A recent cached `NOT_FOUND` website state also prevents the Investigator from immediately spending another website search. Stale `NOT_FOUND` evidence returns to `UNKNOWN` and can be researched again.
 
 ## Runtime
 

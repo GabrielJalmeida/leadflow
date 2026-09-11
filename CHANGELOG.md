@@ -8,6 +8,21 @@
 - Website enrichment no longer assigns a domain from name similarity alone.
 - Added SQLite migration fields for identity status/confidence.
 - Added regression tests for same-name businesses in different cities/states.
+- Added bounded `LeadInvestigator` service for per-lead contact/site/address research.
+- Added `--investigate`, `--investigation-limit` and `--investigation-budget` CLI controls so extra provider cost is explicit.
+- Added Gemini investigation extraction that preserves observed locality, including conflicting same-name businesses.
+- Added conservative field merging: ambiguous candidates are not attached to leads.
+- Added website `NOT_FOUND` transition only after dedicated bounded investigation with corroborated business identity.
+- Added basic Brazilian phone-structure validation and replacement of obvious truncated numbers when stronger evidence exists.
+- Added investigation metrics to reports (`investigated_leads`, `investigation_searches`).
+- Added persistent SQLite web-search cache with TTL, refresh and disable controls.
+- Added cache metrics so each run reports searches saved versus real provider calls.
+- Added conservative persistent lead memory for verified fields and rejected candidates.
+- Lead memory requires a durable identity anchor; same-name/same-city alone never hydrates data.
+- Recent website `NOT_FOUND` evidence can be reused for 30 days; stale absence evidence returns to `UNKNOWN`.
+- Rejected candidate memory expires after 180 days instead of becoming permanent truth.
+- Investigator no longer spends contact searches solely because public email is missing.
+- Resolved website state (`PRESENT` or recent `NOT_FOUND`) can now stop redundant investigation work.
 
 ## 0.1.3
 

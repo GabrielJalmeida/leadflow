@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from leadflow_agent.models import SearchGoal, WebHit
+from leadflow_agent.models import Lead, SearchGoal, WebHit
 from leadflow_agent.providers.gemini import GeminiPlannerProvider, _extract_generate_text, _extract_json_object
 
 
@@ -61,6 +61,30 @@ class GeminiTests(unittest.TestCase):
         )
         self.assertEqual([lead.name for lead in leads], ["Marcenaria Open Art", "Carpintaria Menezes"])
         self.assertTrue(all(lead.source_provider == "tavily+gemini" for lead in leads))
+
+
+    def test_investigator_preserves_observed_other_city(self):
+        response = {
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "text": '{"candidates":[{"name":"Marcenaria Alvorada","city":"Curitiba","state":"PR","phone":"(41) 3333-3333","email":null,"website":"https://marcenariaalvorada.com.br","socials":[],"address":"Curitiba, PR","source_url":"https://example.com/alvorada","source_title":"Marcenaria Alvorada Curitiba","confidence":0.96}]}'
+                    }]
+                }
+            }]
+        }
+        provider = GeminiPlannerProvider("abc", http=FakeHttp(response=response))
+        candidates = provider.extract_investigation_candidates(
+            [WebHit(title="Marcenaria Alvorada Curitiba", url="https://example.com/alvorada", description="Curitiba PR (41) 3333-3333")],
+            Lead(name="Marcenaria Alvorada", city="Praia Grande", state="SP"),
+            SearchGoal(segment="marcenaria", city="Praia Grande", state="SP"),
+            query='"Marcenaria Alvorada" "Praia Grande SP"',
+            purpose="website",
+        )
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].city, "Curitiba")
+        self.assertEqual(candidates[0].state, "PR")
+        self.assertEqual(candidates[0].phone, "(41) 3333-3333")
 
 
 if __name__ == "__main__":

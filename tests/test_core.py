@@ -64,6 +64,16 @@ class FakeExtractor:
         ]
 
 
+class FakeInvestigator:
+    def __init__(self):
+        self.calls = []
+
+    def investigate(self, lead, goal, *, max_searches=2):
+        from types import SimpleNamespace
+        self.calls.append((lead.name, max_searches))
+        return SimpleNamespace(searches_used=max_searches, errors=[])
+
+
 class CoreTests(unittest.TestCase):
     def test_normalize_text(self):
         self.assertEqual(normalize_text("Móveis & Cia"), "moveis cia")
@@ -131,6 +141,26 @@ class CoreTests(unittest.TestCase):
         report = agent.research(SearchGoal(segment="marcenaria", city="Praia Grande", state="SP", limit=1))
         self.assertEqual(len(report.leads), 1)
         self.assertEqual(report.leads[0].name, "Empresa A")
+
+
+    def test_agent_investigation_is_bounded_and_reported(self):
+        provider = FakeLocal()
+        investigator = FakeInvestigator()
+        agent = LeadResearchAgent(
+            local_search=provider,
+            web_search=provider,
+            llm=FakeLLM(),
+            investigator=investigator,
+        )
+        report = agent.research(
+            SearchGoal(segment="marcenaria", city="Praia Grande", state="SP", limit=3),
+            investigate=True,
+            investigation_limit=2,
+            investigation_budget=2,
+        )
+        self.assertEqual(report.investigated_leads, 2)
+        self.assertEqual(report.investigation_searches, 4)
+        self.assertEqual(len(investigator.calls), 2)
 
     def test_store_persists_report(self):
         provider = FakeLocal()

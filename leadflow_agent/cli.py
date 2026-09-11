@@ -6,14 +6,17 @@ import sys
 from pathlib import Path
 
 from .agent import LeadResearchAgent
+from .cache import CachedWebSearchProvider, PersistentSearchCache
 from .config import Settings
 from .export import export_report
 from .models import SearchGoal
+from .memory import LeadMemory
 from .providers.brave import BraveSearchProvider
 from .providers.gemini import GeminiPlannerProvider
 from .providers.outscraper import OutscraperSearchProvider
 from .providers.tavily import TavilySearchProvider
 from .storage import LeadStore
+from .services.investigator import LeadInvestigator
 
 
 VERSION = "0.1.4-dev"
@@ -41,6 +44,44 @@ def _parser() -> argparse.ArgumentParser:
     search.add_argument("--require-phone", action="store_true")
     search.add_argument("--enrich-web", action="store_true", help="Faz buscas extras por empresa para site/social.")
     search.add_argument("--enrichment-limit", type=int, default=None)
+    search.add_argument(
+        "--investigate",
+        action="store_true",
+        help="Investiga leads individualmente com buscas extras e entity resolution.",
+    )
+    search.add_argument(
+        "--investigation-limit",
+        type=int,
+        default=3,
+        help="Máximo de leads investigados nesta execução (default: 3).",
+    )
+    search.add_argument(
+        "--investigation-budget",
+        type=int,
+        default=2,
+        help="Buscas web por lead investigado, de 1 a 3 (default: 2).",
+    )
+    search.add_argument(
+        "--cache-ttl-days",
+        type=int,
+        default=14,
+        help="Validade do cache de busca web em dias, de 1 a 90 (default: 14).",
+    )
+    search.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Desliga o cache persistente de buscas web para esta execução.",
+    )
+    search.add_argument(
+        "--refresh-cache",
+        action="store_true",
+        help="Ignora entradas existentes, faz buscas reais e atualiza o cache.",
+    )
+    search.add_argument(
+        "--no-memory",
+        action="store_true",
+        help="Não reutiliza campos/rejeições verificados em pesquisas anteriores.",
+    )
     search.add_argument("--no-ai", action="store_true", help="Desliga Gemini; Tavily usa extração heurística conservadora.")
     search.add_argument(
         "--provider",
@@ -53,7 +94,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _write_env_interactive(path: Path) -> int:
-    print("LeadFlow setup (BYOK) — Agent architecture v0.1.3")
+    print("LeadFlow setup (BYOK) — Agent architecture v0.1.4-dev")
     print("Gemini = cérebro/extrator. Tavily = busca web. As chaves ficam só no .env local.\n")
     gemini = getpass.getpass("Gemini API key (recomendada): ").strip()
     model = input("Gemini model [gemini-3.1-flash-lite]: ").strip() or "gemini-3.1-flash-lite"
@@ -133,35 +174,74 @@ def _doctor(settings: Settings, *, offline: bool = False) -> int:
     return 0
 
 
-def _build_agent(settings: Settings, *, no_ai: bool, provider_name: str):
+def _build_agent(
+    settings: Settings,
+    *,
+    no_ai: bool,
+    provider_name: str,
+    use_cache: bool = True,
+    refresh_cache: bool = False,
+    cache_ttl_days: int = 14,
+    use_memory: bool = True,
+):
     llm = None
     if not no_ai and settings.gemini_api_key:
         llm = GeminiPlannerProvider(settings.gemini_api_key, model=settings.gemini_model)
 
+    memory = LeadMemory(settings.db_path) if use_memory else None
+
+    def cached(provider):
+        if provider is None or not use_cache:
+            return provider
+        return CachedWebSearchProvider(
+            provider,
+            PersistentSearchCache(settings.db_path, ttl_days=cache_ttl_days),
+            force_refresh=refresh_cache,
+        )
+
     if provider_name == "tavily" or (provider_name == "auto" and settings.tavily_api_key):
         if not settings.tavily_api_key:
             raise RuntimeError("TAVILY_API_KEY não configurada.")
-        web = TavilySearchProvider(settings.tavily_api_key)
+        web = cached(TavilySearchProvider(settings.tavily_api_key))
+        investigator = LeadInvestigator(web_search=web, extractor=llm) if llm is not None else None
         return "tavily", LeadResearchAgent(
             web_search=web,
             llm=llm,
             lead_extractor=llm,
+            investigator=investigator,
+            lead_memory=memory,
         )
 
     if provider_name == "outscraper" or (provider_name == "auto" and settings.outscraper_api_key):
         if not settings.outscraper_api_key:
             raise RuntimeError("OUTSCRAPER_API_KEY não configurada.")
         local = OutscraperSearchProvider(settings.outscraper_api_key)
-        web = TavilySearchProvider(settings.tavily_api_key) if settings.tavily_api_key else (
+        web_base = TavilySearchProvider(settings.tavily_api_key) if settings.tavily_api_key else (
             BraveSearchProvider(settings.brave_api_key) if settings.brave_api_key else None
         )
-        return "outscraper", LeadResearchAgent(local_search=local, web_search=web, llm=llm)
+        web = cached(web_base)
+        investigator = LeadInvestigator(web_search=web, extractor=llm) if (web is not None and llm is not None) else None
+        return "outscraper", LeadResearchAgent(
+            local_search=local,
+            web_search=web,
+            llm=llm,
+            investigator=investigator,
+            lead_memory=memory,
+        )
 
     if provider_name == "brave" or (provider_name == "auto" and settings.brave_api_key):
         if not settings.brave_api_key:
             raise RuntimeError("BRAVE_SEARCH_API_KEY não configurada.")
         provider = BraveSearchProvider(settings.brave_api_key)
-        return "brave", LeadResearchAgent(local_search=provider, web_search=provider, llm=llm)
+        web = cached(provider)
+        investigator = LeadInvestigator(web_search=web, extractor=llm) if llm is not None else None
+        return "brave", LeadResearchAgent(
+            local_search=provider,
+            web_search=web,
+            llm=llm,
+            investigator=investigator,
+            lead_memory=memory,
+        )
 
     raise RuntimeError("Nenhum provider de busca configurado. Rode `python -m leadflow_agent setup`.")
 
@@ -170,9 +250,32 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
     if args.limit < 1 or args.limit > 1000:
         print("--limit deve ficar entre 1 e 1000.", file=sys.stderr)
         return 2
+    if args.investigation_budget < 1 or args.investigation_budget > 3:
+        print("--investigation-budget deve ficar entre 1 e 3.", file=sys.stderr)
+        return 2
+    if args.investigation_limit < 0:
+        print("--investigation-limit não pode ser negativo.", file=sys.stderr)
+        return 2
+    if args.cache_ttl_days < 1 or args.cache_ttl_days > 90:
+        print("--cache-ttl-days deve ficar entre 1 e 90.", file=sys.stderr)
+        return 2
+    if args.no_cache and args.refresh_cache:
+        print("--no-cache e --refresh-cache não podem ser usados juntos.", file=sys.stderr)
+        return 2
+    if args.investigate and (args.no_ai or not settings.gemini_api_key):
+        print("--investigate requer Gemini configurado; a investigação não usa heurística insegura.", file=sys.stderr)
+        return 2
 
     try:
-        selected, agent = _build_agent(settings, no_ai=args.no_ai, provider_name=args.provider)
+        selected, agent = _build_agent(
+            settings,
+            no_ai=args.no_ai,
+            provider_name=args.provider,
+            use_cache=not args.no_cache,
+            refresh_cache=args.refresh_cache,
+            cache_ttl_days=args.cache_ttl_days,
+            use_memory=not args.no_memory,
+        )
     except Exception as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -191,10 +294,24 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
     print(f"Meta: encontrar {goal.limit} leads para '{goal.segment}' em {goal.location_label}")
     print(f"Cérebro/extrator: {ai_mode}")
     print(f"Busca: {selected}")
+    if args.no_cache:
+        print("Cache de busca: DESLIGADO")
+    elif args.refresh_cache:
+        print(f"Cache de busca: REFRESH forçado | TTL {args.cache_ttl_days} dias")
+    else:
+        print(f"Cache de busca: ATIVO | TTL {args.cache_ttl_days} dias")
+    print(f"Memória de leads: {'DESLIGADA' if args.no_memory else 'ATIVA'}")
     if selected == "tavily":
         print("Fluxo: Tavily encontra evidências → Gemini extrai empresas → LeadFlow deduplica.")
     if args.enrich_web:
-        print("Enriquecimento web: ATIVO (pode consumir buscas extras)")
+        print("Enriquecimento web legado: ATIVO (pode consumir buscas extras)")
+    if args.investigate:
+        possible = min(goal.limit, args.investigation_limit)
+        max_searches = possible * args.investigation_budget
+        print(
+            f"Investigator: ATIVO — até {possible} leads × {args.investigation_budget} buscas "
+            f"(máximo {max_searches} buscas extras)"
+        )
     print()
 
     report = agent.research(
@@ -202,6 +319,9 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
         max_queries=args.max_queries,
         enrich_web=args.enrich_web,
         enrichment_limit=args.enrichment_limit,
+        investigate=args.investigate,
+        investigation_limit=args.investigation_limit,
+        investigation_budget=args.investigation_budget,
     )
 
     print(f"Planner: {report.plan.generated_by}")
@@ -215,6 +335,17 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
     print(f"Resultados-fonte vistos:   {report.local_results_seen}")
     print(f"Duplicatas removidas:      {report.duplicates_removed}")
     print(f"Leads entregues:           {len(report.leads)} / {goal.limit}")
+    if args.investigate:
+        print(f"Leads investigados:        {report.investigated_leads}")
+        print(f"Buscas de investigação:    {report.investigation_searches}")
+    if not args.no_cache:
+        print(f"Cache hits (buscas poupadas): {report.search_cache_hits}")
+        print(f"Cache misses (calls reais):   {report.search_cache_misses}")
+        print(f"Entradas gravadas no cache:   {report.search_cache_writes}")
+    if not args.no_memory:
+        print(f"Memórias reaproveitadas:      {report.memory_hits}")
+        print(f"Campos restaurados:           {report.memory_fields_restored}")
+        print(f"Rejeições restauradas:        {report.memory_rejections_restored}")
     if report.errors:
         print(f"Erros recuperáveis:        {len(report.errors)}")
         for error in report.errors[:6]:
@@ -246,6 +377,12 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
             print(f"    Social: {lead.socials[0]}")
         if lead.provider_url:
             print(f"    Evidência: {lead.provider_url}")
+        if args.investigate:
+            print(
+                f"    Identidade: {lead.identity_status.value} "
+                f"({lead.identity_confidence:.0%}) | "
+                f"site: {lead.website_status.value}"
+            )
         print(f"    via: {lead.discovered_query}")
 
     csv_path, json_path = export_report(report)

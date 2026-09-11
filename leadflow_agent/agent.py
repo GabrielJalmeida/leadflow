@@ -3,9 +3,11 @@ from __future__ import annotations
 from .dedupe import lead_key, merge_leads
 from .enrichment import enrich_lead_from_web
 from .models import Lead, ResearchReport, SearchGoal, utc_now_iso
+from .memory import LeadMemory
 from .planner import build_plan
 from .providers.base import LeadExtractorProvider, LLMProvider, LocalSearchProvider, WebSearchProvider
 from .scoring import score_lead
+from .services.investigator import LeadInvestigator
 
 
 class LeadResearchAgent:
@@ -16,6 +18,8 @@ class LeadResearchAgent:
         web_search: WebSearchProvider | None = None,
         llm: LLMProvider | None = None,
         lead_extractor: LeadExtractorProvider | None = None,
+        investigator: LeadInvestigator | None = None,
+        lead_memory: LeadMemory | None = None,
     ):
         if local_search is None and web_search is None:
             raise ValueError("LeadResearchAgent requires a local or web search provider.")
@@ -23,6 +27,8 @@ class LeadResearchAgent:
         self.web_search = web_search
         self.llm = llm
         self.lead_extractor = lead_extractor
+        self.investigator = investigator
+        self.lead_memory = lead_memory
 
     def research(
         self,
@@ -31,8 +37,12 @@ class LeadResearchAgent:
         max_queries: int = 6,
         enrich_web: bool = False,
         enrichment_limit: int | None = None,
+        investigate: bool = False,
+        investigation_limit: int | None = None,
+        investigation_budget: int = 2,
     ) -> ResearchReport:
         started = utc_now_iso()
+        cache_before = _cache_snapshot(self.web_search)
         plan = build_plan(goal, self.llm, max_queries=max_queries)
         unique: dict[str, Lead] = {}
         queries_executed: list[str] = []
@@ -97,6 +107,21 @@ class LeadResearchAgent:
 
         leads = list(unique.values())
 
+        memory_hits = 0
+        memory_fields_restored = 0
+        memory_rejections_restored = 0
+        if self.lead_memory is not None:
+            for lead in leads:
+                try:
+                    memory = self.lead_memory.hydrate(lead)
+                except Exception as exc:
+                    errors.append(f"{lead.name}: memory hydration failed: {exc}")
+                    continue
+                if memory.matched:
+                    memory_hits += 1
+                    memory_fields_restored += memory.fields_restored
+                    memory_rejections_restored += memory.rejected_restored
+
         if enrich_web and self.web_search is not None:
             candidates = leads if enrichment_limit is None else leads[: max(0, enrichment_limit)]
             for lead in candidates:
@@ -107,6 +132,40 @@ class LeadResearchAgent:
                         from .models import Evidence
                         lead.evidence.append(Evidence(source=self.web_search.name, kind="enrichment_error", detail=str(exc)))
 
+        # Preliminary score determines which candidates are worth spending a
+        # bounded investigation budget on. Investigation is opt-in so a normal
+        # discovery run never spends unexpected provider credits.
+        for lead in leads:
+            score_lead(lead, prefer_no_website=goal.prefer_no_website)
+
+        investigated_leads = 0
+        investigation_searches = 0
+        if investigate:
+            if self.investigator is None:
+                errors.append("investigation requested but no investigator is configured")
+            else:
+                ordered = sorted(
+                    leads,
+                    key=lambda item: (item.score, item.confidence_score, bool(item.phone)),
+                    reverse=True,
+                )
+                cap = len(ordered) if investigation_limit is None else max(0, int(investigation_limit))
+                for lead in ordered[:cap]:
+                    try:
+                        investigation = self.investigator.investigate(
+                            lead,
+                            goal,
+                            max_searches=investigation_budget,
+                        )
+                        investigated_leads += 1
+                        investigation_searches += investigation.searches_used
+                        for error in investigation.errors:
+                            errors.append(f"{lead.name}: {error}")
+                    except Exception as exc:
+                        errors.append(f"{lead.name}: investigation failed: {exc}")
+
+        # Re-score after enrichment/investigation because verified fields and a
+        # NOT_FOUND website state can materially change the opportunity score.
         for lead in leads:
             score_lead(lead, prefer_no_website=goal.prefer_no_website)
 
@@ -120,6 +179,14 @@ class LeadResearchAgent:
         )
         leads = leads[: goal.limit]
 
+        cache_after = _cache_snapshot(self.web_search)
+        cache_hits = cache_misses = cache_writes = 0
+        if cache_before is not None and cache_after is not None:
+            delta = cache_after.delta(cache_before)
+            cache_hits = delta.hits
+            cache_misses = delta.misses
+            cache_writes = delta.writes
+
         return ResearchReport(
             goal=goal,
             plan=plan,
@@ -130,7 +197,27 @@ class LeadResearchAgent:
             started_at=started,
             finished_at=utc_now_iso(),
             errors=errors,
+            investigated_leads=investigated_leads,
+            investigation_searches=investigation_searches,
+            search_cache_hits=cache_hits,
+            search_cache_misses=cache_misses,
+            search_cache_writes=cache_writes,
+            memory_hits=memory_hits,
+            memory_fields_restored=memory_fields_restored,
+            memory_rejections_restored=memory_rejections_restored,
         )
+
+
+def _cache_snapshot(provider):
+    if provider is None:
+        return None
+    snapshot = getattr(provider, "cache_snapshot", None)
+    if snapshot is None:
+        return None
+    try:
+        return snapshot()
+    except Exception:
+        return None
 
 
 def _build_web_discovery_query(query: str, goal: SearchGoal) -> str:

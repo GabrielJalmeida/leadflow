@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
@@ -136,6 +136,25 @@ class Lead:
 
 
 @dataclass(slots=True)
+class InvestigationCandidate:
+    name: str = ""
+    city: str = ""
+    state: str = ""
+    address: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    website: str | None = None
+    socials: list[str] = field(default_factory=list)
+    source_url: str | None = None
+    source_title: str = ""
+    source: str = ""
+    confidence: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.confidence = _clamp_confidence(self.confidence)
+
+
+@dataclass(slots=True)
 class WebHit:
     title: str
     url: str
@@ -154,6 +173,14 @@ class ResearchReport:
     started_at: str
     finished_at: str
     errors: list[str] = field(default_factory=list)
+    investigated_leads: int = 0
+    investigation_searches: int = 0
+    search_cache_hits: int = 0
+    search_cache_misses: int = 0
+    search_cache_writes: int = 0
+    memory_hits: int = 0
+    memory_fields_restored: int = 0
+    memory_rejections_restored: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -166,7 +193,58 @@ class ResearchReport:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "errors": self.errors,
+            "investigated_leads": self.investigated_leads,
+            "investigation_searches": self.investigation_searches,
+            "search_cache_hits": self.search_cache_hits,
+            "search_cache_misses": self.search_cache_misses,
+            "search_cache_writes": self.search_cache_writes,
+            "memory_hits": self.memory_hits,
+            "memory_fields_restored": self.memory_fields_restored,
+            "memory_rejections_restored": self.memory_rejections_restored,
         }
+
+
+def lead_from_dict(data: dict[str, Any]) -> Lead:
+    """Rebuild a Lead from persisted JSON while tolerating older v0.x payloads."""
+
+    payload = dict(data)
+    try:
+        payload["website_status"] = WebsiteStatus(
+            payload.get("website_status", WebsiteStatus.UNKNOWN.value)
+        )
+    except (TypeError, ValueError):
+        payload["website_status"] = WebsiteStatus.UNKNOWN
+    try:
+        payload["identity_status"] = IdentityStatus(
+            payload.get("identity_status", IdentityStatus.UNVERIFIED.value)
+        )
+    except (TypeError, ValueError):
+        payload["identity_status"] = IdentityStatus.UNVERIFIED
+
+    evidence: list[Evidence] = []
+    for item in payload.get("evidence") or []:
+        if not isinstance(item, dict):
+            continue
+        allowed = {field_.name for field_ in fields(Evidence)}
+        evidence.append(Evidence(**{key: value for key, value in item.items() if key in allowed}))
+    payload["evidence"] = evidence
+
+    rejected: list[RejectedCandidate] = []
+    for item in payload.get("rejected_candidates") or []:
+        if not isinstance(item, dict):
+            continue
+        allowed = {field_.name for field_ in fields(RejectedCandidate)}
+        try:
+            rejected.append(
+                RejectedCandidate(**{key: value for key, value in item.items() if key in allowed})
+            )
+        except TypeError:
+            continue
+    payload["rejected_candidates"] = rejected
+
+    allowed_lead = {field_.name for field_ in fields(Lead)}
+    clean = {key: value for key, value in payload.items() if key in allowed_lead}
+    return Lead(**clean)
 
 
 def _clamp_confidence(value: object) -> float:
