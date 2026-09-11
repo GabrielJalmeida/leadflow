@@ -146,6 +146,8 @@ class CoreTests(unittest.TestCase):
                 columns = {row[1] for row in store.conn.execute("PRAGMA table_info(leads)")}
                 self.assertIn("website_status", columns)
                 self.assertIn("confidence_score", columns)
+                self.assertIn("identity_status", columns)
+                self.assertIn("identity_confidence", columns)
             finally:
                 store.close()
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — 0.1.4-dev
+
+- Added explicit business identity states (`UNVERIFIED`, `MATCHED`, `PROBABLE_MATCH`, `AMBIGUOUS`, `MISMATCH`).
+- Added conservative entity-resolution rules for phone, domain, name and locality.
+- Added rejected-candidate memory so known-wrong website candidates are not repeatedly investigated.
+- Website enrichment no longer assigns a domain from name similarity alone.
+- Added SQLite migration fields for identity status/confidence.
+- Added regression tests for same-name businesses in different cities/states.
+
 ## 0.1.3
 
 - Added Tavily as the recommended BYOK discovery provider.

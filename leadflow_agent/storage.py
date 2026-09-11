@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS leads (
     email TEXT,
     website TEXT,
     website_status TEXT NOT NULL DEFAULT 'unknown',
+    identity_status TEXT NOT NULL DEFAULT 'unverified',
+    identity_confidence REAL NOT NULL DEFAULT 0,
     address TEXT,
     confidence_score INTEGER NOT NULL DEFAULT 0,
     score INTEGER NOT NULL DEFAULT 0,
@@ -69,6 +71,14 @@ class LeadStore:
             self.conn.execute(
                 "ALTER TABLE leads ADD COLUMN website_status TEXT NOT NULL DEFAULT 'unknown'"
             )
+        if "identity_status" not in columns:
+            self.conn.execute(
+                "ALTER TABLE leads ADD COLUMN identity_status TEXT NOT NULL DEFAULT 'unverified'"
+            )
+        if "identity_confidence" not in columns:
+            self.conn.execute(
+                "ALTER TABLE leads ADD COLUMN identity_confidence REAL NOT NULL DEFAULT 0"
+            )
         if "confidence_score" not in columns:
             self.conn.execute(
                 "ALTER TABLE leads ADD COLUMN confidence_score INTEGER NOT NULL DEFAULT 0"
@@ -101,9 +111,9 @@ class LeadStore:
                 """
                 INSERT INTO leads (
                     lead_key, name, city, state, country, phone, email,
-                    website, website_status, address, confidence_score, score,
-                    source_provider, payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    website, website_status, identity_status, identity_confidence,
+                    address, confidence_score, score, source_provider, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(lead_key) DO UPDATE SET
                     name=excluded.name,
                     city=excluded.city,
@@ -117,6 +127,11 @@ class LeadStore:
                         WHEN leads.website_status = 'present' THEN leads.website_status
                         ELSE excluded.website_status
                     END,
+                    identity_status=CASE
+                        WHEN excluded.identity_confidence >= leads.identity_confidence THEN excluded.identity_status
+                        ELSE leads.identity_status
+                    END,
+                    identity_confidence=MAX(excluded.identity_confidence, leads.identity_confidence),
                     address=COALESCE(excluded.address, leads.address),
                     confidence_score=MAX(excluded.confidence_score, leads.confidence_score),
                     score=excluded.score,
@@ -126,7 +141,8 @@ class LeadStore:
                 """,
                 (
                     key, lead.name, lead.city, lead.state, lead.country, lead.phone,
-                    lead.email, lead.website, lead.website_status.value, lead.address,
+                    lead.email, lead.website, lead.website_status.value,
+                    lead.identity_status.value, lead.identity_confidence, lead.address,
                     lead.confidence_score, lead.score, lead.source_provider, payload,
                 ),
             )

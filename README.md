@@ -1,4 +1,4 @@
-# LeadFlow Agent v0.1.3
+# LeadFlow Agent v0.1.4-dev
 
 Open-source BYOK lead-research agent. This milestone replaces the assumption that a search result is already a business record.
 
@@ -13,6 +13,10 @@ user goal
 ```
 
 A directory page can therefore produce multiple leads, while the directory itself is not treated as a lead.
+
+## Identity safety
+
+LeadFlow treats **false association as worse than missing data**. A business name alone is not enough to attach a website or merge identities. Same-name businesses in different cities/states are explicitly treated as different entities, while phone/domain matches provide much stronger identity evidence. Ambiguous website candidates remain unassigned until the Investigator can verify them.
 
 ## Why Tavily
 

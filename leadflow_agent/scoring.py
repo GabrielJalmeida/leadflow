@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .models import Lead, WebsiteStatus
+from .models import IdentityStatus, Lead, WebsiteStatus
 
 
 def score_lead(lead: Lead, *, prefer_no_website: bool = True) -> Lead:
@@ -68,6 +68,10 @@ def evidence_confidence_score(lead: Lead) -> int:
     """
 
     identity = lead.discovery_confidence
+    if lead.identity_status in {IdentityStatus.MATCHED, IdentityStatus.PROBABLE_MATCH}:
+        identity = max(identity, lead.identity_confidence)
+    elif lead.identity_status == IdentityStatus.MISMATCH:
+        identity = 0.0
     if identity <= 0 and lead.evidence:
         identity = 0.50
 

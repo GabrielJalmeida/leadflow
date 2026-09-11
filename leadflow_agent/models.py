@@ -10,6 +10,16 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+class IdentityStatus(str, Enum):
+    """Confidence state for whether evidence belongs to the same real business."""
+
+    UNVERIFIED = "unverified"
+    MATCHED = "matched"
+    PROBABLE_MATCH = "probable_match"
+    AMBIGUOUS = "ambiguous"
+    MISMATCH = "mismatch"
+
+
 class WebsiteStatus(str, Enum):
     """Lifecycle state for a lead website.
 
@@ -60,6 +70,20 @@ class Evidence:
 
 
 @dataclass(slots=True)
+class RejectedCandidate:
+    value: str
+    target_field: str
+    reason: str
+    source: str = ""
+    confidence: float = 0.0
+    observed_name: str | None = None
+    observed_city: str | None = None
+    observed_state: str | None = None
+    observed_phone: str | None = None
+    rejected_at: str = field(default_factory=utc_now_iso)
+
+
+@dataclass(slots=True)
 class Lead:
     name: str
     city: str = ""
@@ -81,11 +105,14 @@ class Lead:
     source_provider: str = ""
     discovered_query: str = ""
     discovery_confidence: float = 0.0
+    identity_status: IdentityStatus = IdentityStatus.UNVERIFIED
+    identity_confidence: float = 0.0
     field_confidence: dict[str, float] = field(default_factory=dict)
     confidence_score: int = 0
     score: int = 0
     score_reasons: list[str] = field(default_factory=list)
     evidence: list[Evidence] = field(default_factory=list)
+    rejected_candidates: list[RejectedCandidate] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
@@ -95,6 +122,7 @@ class Lead:
             self.website_status = WebsiteStatus.PRESENT
 
         self.discovery_confidence = _clamp_confidence(self.discovery_confidence)
+        self.identity_confidence = _clamp_confidence(self.identity_confidence)
         self.field_confidence = {
             str(key): _clamp_confidence(value)
             for key, value in self.field_confidence.items()
