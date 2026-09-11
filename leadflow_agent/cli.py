@@ -19,6 +19,9 @@ from .providers.brave import BraveSearchProvider
 from .providers.gemini import GeminiPlannerProvider
 from .providers.outscraper import OutscraperSearchProvider
 from .providers.tavily import TavilySearchProvider
+from .providers.guarded import GuardedAIProvider, GuardedLocalSearchProvider, GuardedWebSearchProvider
+from .providers.catalog import PROVIDER_CATALOG
+from .runtime import RunBudget, RunController
 from .storage import LeadStore
 from .services.investigator import LeadInvestigator
 from .services.website_auditor import WebsiteAuditor
@@ -42,6 +45,7 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("setup", help="Cria um .env local de forma interativa.")
     sub.add_parser("segments", help="Lista segmentos pré-selecionados; busca livre continua disponível.")
     sub.add_parser("profiles", help="Lista perfis prontos de qualificação/filtro.")
+    sub.add_parser("providers", help="Lista providers e capacidades do core.")
 
     search = sub.add_parser("search", help="Pesquisa leads reais.")
     search.add_argument("--segment", required=True, help='Ex.: "marcenaria"')
@@ -190,6 +194,11 @@ def _parser() -> argparse.ArgumentParser:
         default="auto",
         help="Provider de descoberta. Auto prioriza Tavily.",
     )
+    search.add_argument("--max-search-calls", type=int, default=20, help="Hard budget de calls reais de busca por execução (1-50).")
+    search.add_argument("--max-llm-calls", type=int, default=30, help="Hard budget de operações de IA por execução (1-100).")
+    search.add_argument("--max-website-audits", type=int, default=25, help="Hard budget de auditorias HTTP por execução (0-50).")
+    search.add_argument("--max-browser-audits", type=int, default=10, help="Hard budget de auditorias Playwright por execução (0-25).")
+    search.add_argument("--max-visual-audits", type=int, default=10, help="Hard budget de auditorias visuais por execução (0-20).")
     search.add_argument("--no-save", action="store_true", help="Não grava no SQLite.")
     return parser
 
@@ -285,10 +294,15 @@ def _build_agent(
     refresh_cache: bool = False,
     cache_ttl_days: int = 14,
     use_memory: bool = True,
+    run_controller: RunController | None = None,
 ):
+    controller = run_controller or RunController()
     llm = None
     if not no_ai and settings.gemini_api_key:
-        llm = GeminiPlannerProvider(settings.gemini_api_key, model=settings.gemini_model)
+        llm = GuardedAIProvider(
+            GeminiPlannerProvider(settings.gemini_api_key, model=settings.gemini_model),
+            controller,
+        )
 
     memory = LeadMemory(settings.db_path) if use_memory else None
 
@@ -304,7 +318,7 @@ def _build_agent(
     if provider_name == "tavily" or (provider_name == "auto" and settings.tavily_api_key):
         if not settings.tavily_api_key:
             raise RuntimeError("TAVILY_API_KEY não configurada.")
-        web = cached(TavilySearchProvider(settings.tavily_api_key))
+        web = cached(GuardedWebSearchProvider(TavilySearchProvider(settings.tavily_api_key), controller))
         investigator = LeadInvestigator(web_search=web, extractor=llm) if llm is not None else None
         return "tavily", LeadResearchAgent(
             web_search=web,
@@ -315,14 +329,15 @@ def _build_agent(
             website_auditor=WebsiteAuditor(),
             browser_auditor=BrowserAuditor(),
             visual_auditor=VisualAuditor(llm) if llm is not None else None,
+            run_controller=controller,
         )
 
     if provider_name == "outscraper" or (provider_name == "auto" and settings.outscraper_api_key):
         if not settings.outscraper_api_key:
             raise RuntimeError("OUTSCRAPER_API_KEY não configurada.")
-        local = OutscraperSearchProvider(settings.outscraper_api_key)
-        web_base = TavilySearchProvider(settings.tavily_api_key) if settings.tavily_api_key else (
-            BraveSearchProvider(settings.brave_api_key) if settings.brave_api_key else None
+        local = GuardedLocalSearchProvider(OutscraperSearchProvider(settings.outscraper_api_key), controller)
+        web_base = GuardedWebSearchProvider(TavilySearchProvider(settings.tavily_api_key), controller) if settings.tavily_api_key else (
+            GuardedWebSearchProvider(BraveSearchProvider(settings.brave_api_key), controller) if settings.brave_api_key else None
         )
         web = cached(web_base)
         investigator = LeadInvestigator(web_search=web, extractor=llm) if (web is not None and llm is not None) else None
@@ -335,16 +350,18 @@ def _build_agent(
             website_auditor=WebsiteAuditor(),
             browser_auditor=BrowserAuditor(),
             visual_auditor=VisualAuditor(llm) if llm is not None else None,
+            run_controller=controller,
         )
 
     if provider_name == "brave" or (provider_name == "auto" and settings.brave_api_key):
         if not settings.brave_api_key:
             raise RuntimeError("BRAVE_SEARCH_API_KEY não configurada.")
         provider = BraveSearchProvider(settings.brave_api_key)
-        web = cached(provider)
+        local = GuardedLocalSearchProvider(provider, controller)
+        web = cached(GuardedWebSearchProvider(provider, controller))
         investigator = LeadInvestigator(web_search=web, extractor=llm) if llm is not None else None
         return "brave", LeadResearchAgent(
-            local_search=provider,
+            local_search=local,
             web_search=web,
             llm=llm,
             investigator=investigator,
@@ -352,6 +369,7 @@ def _build_agent(
             website_auditor=WebsiteAuditor(),
             browser_auditor=BrowserAuditor(),
             visual_auditor=VisualAuditor(llm) if llm is not None else None,
+            run_controller=controller,
         )
 
     raise RuntimeError("Nenhum provider de busca configurado. Rode `python -m leadflow_agent setup`.")
@@ -371,6 +389,17 @@ def _print_profiles() -> int:
     for profile in PROFILES.values():
         print(f"  {profile.slug:<16} {profile.label} — {profile.description}")
     print("\nPerfis são defaults; flags avançadas sobrescrevem os filtros do perfil.")
+    return 0
+
+
+def _print_providers() -> int:
+    print("Providers suportados pelo core:")
+    for item in PROVIDER_CATALOG.values():
+        roles = ", ".join(item.roles)
+        capabilities = ", ".join(item.capabilities)
+        print(f"  {item.slug:<12} {item.label} | roles: {roles}")
+        print(f"               capabilities: {capabilities}")
+    print("\nCredenciais são BYOK; free/paid é uma decisão do provider/conta, não da lógica do core.")
     return 0
 
 
@@ -405,12 +434,24 @@ def _build_filter_spec(args: argparse.Namespace) -> LeadFilterSpec:
 
 
 def _search(args: argparse.Namespace, settings: Settings) -> int:
-    if args.limit < 1 or args.limit > 1000:
-        print("--limit deve ficar entre 1 e 1000.", file=sys.stderr)
+    if args.limit < 1 or args.limit > 100:
+        print("--limit deve ficar entre 1 e 100 no modo normal. Volumes maiores serão tratados por Bulk Research.", file=sys.stderr)
         return 2
     if args.filter_pool_multiplier < 1 or args.filter_pool_multiplier > 5:
         print("--filter-pool-multiplier deve ficar entre 1 e 5.", file=sys.stderr)
         return 2
+    budget_ranges = {
+        "max_search_calls": (1, 50),
+        "max_llm_calls": (1, 100),
+        "max_website_audits": (0, 50),
+        "max_browser_audits": (0, 25),
+        "max_visual_audits": (0, 20),
+    }
+    for name, (minimum, maximum) in budget_ranges.items():
+        value = getattr(args, name)
+        if value < minimum or value > maximum:
+            print(f"--{name.replace('_','-')} deve ficar entre {minimum} e {maximum}.", file=sys.stderr)
+            return 2
     for name in ("min_opportunity_score", "max_technical_score", "max_browser_score", "max_visual_score", "min_visual_confidence"):
         value = getattr(args, name)
         if value is not None and not 0 <= value <= 100:
@@ -462,6 +503,16 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
         print("--investigate requer Gemini configurado; a investigação não usa heurística insegura.", file=sys.stderr)
         return 2
 
+    run_controller = RunController(
+        RunBudget(
+            max_search_calls=args.max_search_calls,
+            max_llm_calls=args.max_llm_calls,
+            max_website_audits=args.max_website_audits,
+            max_browser_audits=args.max_browser_audits,
+            max_visual_audits=args.max_visual_audits,
+        )
+    )
+
     try:
         selected, agent = _build_agent(
             settings,
@@ -471,6 +522,7 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
             refresh_cache=args.refresh_cache,
             cache_ttl_days=args.cache_ttl_days,
             use_memory=not args.no_memory,
+            run_controller=run_controller,
         )
     except Exception as exc:
         print(str(exc), file=sys.stderr)
@@ -497,6 +549,11 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
     print(f"Perfil: {args.profile}{' + filtros avançados' if lead_filter.active else ''}")
     print(f"Cérebro/extrator: {ai_mode}")
     print(f"Busca: {selected}")
+    print(
+        "Safety budget: "
+        f"search {args.max_search_calls} | AI {args.max_llm_calls} | "
+        f"HTTP audits {args.max_website_audits} | browser {args.max_browser_audits} | visual {args.max_visual_audits}"
+    )
     if args.no_cache:
         print("Cache de busca: DESLIGADO")
     elif args.refresh_cache:
@@ -569,6 +626,15 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
     print(f"Resultados-fonte vistos:   {report.local_results_seen}")
     print(f"Duplicatas removidas:      {report.duplicates_removed}")
     print(f"Leads entregues:           {len(report.leads)} / {goal.limit}")
+    print(f"Status da execução:        {report.run_status}")
+    if report.run_stop_reason:
+        print(f"Motivo de parada:          {report.run_stop_reason}")
+    print(
+        "Uso real da execução:      "
+        f"search={report.usage_search_calls} | AI={report.usage_llm_calls} | "
+        f"HTTP={report.usage_website_audits} | browser={report.usage_browser_audits} | "
+        f"visual={report.usage_visual_audits}"
+    )
     if lead_filter.active:
         print(f"Candidatos antes do filtro:{report.filter_candidates_seen:>5}")
         print(f"Filtrados pelos critérios: {report.filter_rejected:>5}")
@@ -700,6 +766,8 @@ def main(argv: list[str] | None = None) -> int:
         return _print_segments()
     if args.command == "profiles":
         return _print_profiles()
+    if args.command == "providers":
+        return _print_providers()
 
     settings = Settings.load()
     if args.command == "doctor":

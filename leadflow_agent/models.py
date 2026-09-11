@@ -299,6 +299,13 @@ class ResearchReport:
     visual_audit_errors: int = 0
     filter_candidates_seen: int = 0
     filter_rejected: int = 0
+    run_status: str = "completed"
+    run_stop_reason: str | None = None
+    usage_search_calls: int = 0
+    usage_llm_calls: int = 0
+    usage_website_audits: int = 0
+    usage_browser_audits: int = 0
+    usage_visual_audits: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -332,6 +339,13 @@ class ResearchReport:
             "visual_audit_errors": self.visual_audit_errors,
             "filter_candidates_seen": self.filter_candidates_seen,
             "filter_rejected": self.filter_rejected,
+            "run_status": self.run_status,
+            "run_stop_reason": self.run_stop_reason,
+            "usage_search_calls": self.usage_search_calls,
+            "usage_llm_calls": self.usage_llm_calls,
+            "usage_website_audits": self.usage_website_audits,
+            "usage_browser_audits": self.usage_browser_audits,
+            "usage_visual_audits": self.usage_visual_audits,
         }
 
 

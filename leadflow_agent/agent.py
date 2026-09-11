@@ -13,6 +13,7 @@ from .services.investigator import LeadInvestigator
 from .services.website_auditor import WebsiteAuditor
 from .services.browser_auditor import BrowserAuditor
 from .services.visual_auditor import VisualAuditor
+from .runtime import BudgetExceeded, BudgetKind, RunCancelled, RunController
 
 
 class LeadResearchAgent:
@@ -28,6 +29,7 @@ class LeadResearchAgent:
         website_auditor: WebsiteAuditor | None = None,
         browser_auditor: BrowserAuditor | None = None,
         visual_auditor: VisualAuditor | None = None,
+        run_controller: RunController | None = None,
     ):
         if local_search is None and web_search is None:
             raise ValueError("LeadResearchAgent requires a local or web search provider.")
@@ -40,6 +42,7 @@ class LeadResearchAgent:
         self.website_auditor = website_auditor
         self.browser_auditor = browser_auditor
         self.visual_auditor = visual_auditor
+        self.run_controller = run_controller or RunController()
 
     def research(
         self,
@@ -82,8 +85,14 @@ class LeadResearchAgent:
         quality_rejected = 0
         invalid_fields_removed = 0
         errors: list[str] = []
+        controller = self.run_controller
 
         for query in plan.queries:
+            try:
+                controller.check_cancelled()
+            except RunCancelled as exc:
+                errors.append(str(exc))
+                break
             if len(unique) >= target_pool:
                 break
             remaining = max(1, target_pool - len(unique))
@@ -93,6 +102,9 @@ class LeadResearchAgent:
                 request_count = min(100, max(20, remaining * 3))
                 try:
                     found = self.local_search.search_places(query, goal, count=request_count)
+                except (BudgetExceeded, RunCancelled) as exc:
+                    errors.append(f"{query}: {exc}")
+                    break
                 except Exception as exc:
                     errors.append(f"{query}: {exc}")
                     continue
@@ -103,6 +115,9 @@ class LeadResearchAgent:
                 web_query = _build_web_discovery_query(query, goal)
                 try:
                     hits = self.web_search.search_web(web_query, country="BR", count=request_count)
+                except (BudgetExceeded, RunCancelled) as exc:
+                    errors.append(f"{query}: search stopped: {exc}")
+                    break
                 except Exception as exc:
                     errors.append(f"{query}: search failed: {exc}")
                     continue
@@ -223,6 +238,7 @@ class LeadResearchAgent:
                 cap = len(audit_candidates) if audit_limit is None else max(0, int(audit_limit))
                 for lead in audit_candidates[:cap]:
                     try:
+                        controller.consume(BudgetKind.WEBSITE_AUDIT)
                         outcome = self.website_auditor.audit(
                             lead,
                             timeout=audit_timeout,
@@ -235,6 +251,9 @@ class LeadResearchAgent:
                             website_audits_run += 1
                         if outcome.audit.error or outcome.audit.blocked:
                             website_audit_errors += 1
+                    except (BudgetExceeded, RunCancelled) as exc:
+                        errors.append(f"{lead.name}: website audit stopped: {exc}")
+                        break
                     except Exception as exc:
                         website_audit_errors += 1
                         errors.append(f"{lead.name}: website audit failed: {exc}")
@@ -258,6 +277,7 @@ class LeadResearchAgent:
                 cap = len(browser_candidates) if browser_audit_limit is None else max(0, int(browser_audit_limit))
                 for lead in browser_candidates[:cap]:
                     try:
+                        controller.consume(BudgetKind.BROWSER_AUDIT)
                         outcome = self.browser_auditor.audit(
                             lead,
                             timeout=browser_timeout,
@@ -271,6 +291,9 @@ class LeadResearchAgent:
                             browser_audits_run += 1
                         if outcome.audit.error or not outcome.audit.loaded:
                             browser_audit_errors += 1
+                    except (BudgetExceeded, RunCancelled) as exc:
+                        errors.append(f"{lead.name}: browser audit stopped: {exc}")
+                        break
                     except Exception as exc:
                         browser_audit_errors += 1
                         errors.append(f"{lead.name}: browser audit failed: {exc}")
@@ -301,6 +324,7 @@ class LeadResearchAgent:
                 cap = len(visual_candidates) if visual_audit_limit is None else max(0, int(visual_audit_limit))
                 for lead in visual_candidates[:cap]:
                     try:
+                        controller.consume(BudgetKind.VISUAL_AUDIT)
                         outcome = self.visual_auditor.audit(
                             lead,
                             max_age_days=visual_audit_ttl_days,
@@ -316,6 +340,9 @@ class LeadResearchAgent:
                                 f"{lead.name}: visual audit low confidence "
                                 f"({outcome.audit.confidence:.0%})"
                             )
+                    except (BudgetExceeded, RunCancelled) as exc:
+                        errors.append(f"{lead.name}: visual audit stopped: {exc}")
+                        break
                     except Exception as exc:
                         visual_audit_errors += 1
                         errors.append(f"{lead.name}: visual audit failed: {exc}")
@@ -356,6 +383,7 @@ class LeadResearchAgent:
             cache_misses = delta.misses
             cache_writes = delta.writes
 
+        controller.finish()
         return ResearchReport(
             goal=goal,
             plan=plan,
@@ -387,6 +415,13 @@ class LeadResearchAgent:
             visual_audit_errors=visual_audit_errors,
             filter_candidates_seen=filter_candidates_seen,
             filter_rejected=filter_rejected,
+            run_status=controller.status.value,
+            run_stop_reason=controller.stop_reason,
+            usage_search_calls=controller.usage.search_calls,
+            usage_llm_calls=controller.usage.llm_calls,
+            usage_website_audits=controller.usage.website_audits,
+            usage_browser_audits=controller.usage.browser_audits,
+            usage_visual_audits=controller.usage.visual_audits,
         )
 
 

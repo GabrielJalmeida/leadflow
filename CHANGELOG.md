@@ -105,3 +105,16 @@
 - Added post-qualification filters for website state, Instagram, phone, email, readiness, opportunity type and audit thresholds.
 - Added a bounded candidate-pool multiplier so filtered searches can inspect more candidates without silently becoming unbounded.
 - Added `segments` and `profiles` CLI discovery commands.
+
+## v0.1.4-dev — Phase 7.1: Runtime Safety & Provider Foundation
+
+- Normal interactive/CLI research is now capped at 100 requested leads; larger volumes are reserved for a future resumable Bulk Research mode.
+- Added a per-run hard `RunBudget` for real search calls, AI operations, HTTP audits, browser audits and visual audits.
+- Added explicit run statuses and partial completion when a safety budget is exhausted instead of treating quota exhaustion as a crash.
+- Added cancellation hooks so the future frontend can stop a running job between bounded operations.
+- Added per-run provider usage counters to research reports and CLI output.
+- Added per-provider transient-failure circuit breakers; repeated 408/429/5xx/timeouts stop further calls to an unhealthy provider during that run.
+- Search-call accounting sits inside the persistent cache, so cache hits do not consume the external-search budget.
+- Added provider capability metadata and a `providers` CLI command, keeping free/paid account choices separate from core business logic.
+- Hardened Python packaging: explicit `leadflow_agent*` package discovery prevents runtime `data/`/`output/` folders from being mistaken for packages.
+- Updated project license metadata to the current SPDX-string form.

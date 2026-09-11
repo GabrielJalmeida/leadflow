@@ -271,3 +271,43 @@ python -m leadflow_agent search --segment marcenaria --city "Praia Grande" --sta
 ```
 
 Profiles are defaults, not restrictions: advanced flags can override website state, Instagram/phone/e-mail presence, READY/VERIFY state, opportunity types and technical/browser/visual score thresholds. Custom segments remain valid even when they are not in the preset catalog.
+
+## Runtime safety & provider foundation (Phase 7.1)
+
+LeadFlow now treats API quota and accidental large jobs as safety concerns, not merely user responsibility.
+
+Normal search runs accept at most **100 requested leads**. A future Bulk Research workflow will handle larger jobs with checkpoints/resume instead of letting a typo such as `--limit 1000` start an unexpectedly expensive run.
+
+Every run also has an independent hard safety envelope:
+
+```text
+search calls       20 default
+AI operations      30 default
+HTTP audits        25 default
+browser audits     10 default
+visual audits      10 default
+```
+
+These budgets are not promises to spend that amount; cache/memory may make the real usage much smaller. If a budget is reached, LeadFlow returns the useful work already completed with `partial_budget` status instead of looping indefinitely.
+
+Advanced CLI users can lower or raise the envelope within conservative hard ranges:
+
+```text
+--max-search-calls
+--max-llm-calls
+--max-website-audits
+--max-browser-audits
+--max-visual-audits
+```
+
+The report exposes the actual per-run usage separately from requested result count. Repeated transient provider failures also trigger a per-run circuit breaker so an unhealthy API is not hammered indefinitely.
+
+Cancellation is represented in the core through a callback hook even though the current CLI has no Cancel button yet. The first frontend can therefore stop a job cleanly without redesigning the research engine.
+
+Provider roles/capabilities can be inspected with:
+
+```bat
+python -m leadflow_agent providers
+```
+
+Provider capability metadata deliberately does not encode volatile pricing. LeadFlow treats BYOK free/paid account choice as configuration; discovery/planning code depends on provider capabilities rather than billing plan names.
