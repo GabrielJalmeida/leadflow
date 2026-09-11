@@ -7,15 +7,10 @@
 **Local-first · BYOK · Open source · Explainable scoring · Security-aware**
 
 ![Status](https://img.shields.io/badge/status-alpha-orange)
-
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
-
 ![Tests](https://img.shields.io/badge/tests-125%20passing-brightgreen)
-
 ![License](https://img.shields.io/badge/license-MIT-green)
-
 ![Architecture](https://img.shields.io/badge/architecture-local--first-informational)
-
 ![BYOK](https://img.shields.io/badge/providers-BYOK-blueviolet)
 
 **Current version:** `v0.2.0-alpha.1` (`0.2.0a1` package version)
