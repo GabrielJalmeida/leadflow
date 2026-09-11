@@ -119,21 +119,27 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(a.website, "https://a.example")
         self.assertEqual(len(a.socials), 2)
 
-    def test_unknown_site_is_not_rewarded(self):
+    def test_unknown_site_is_not_treated_as_no_site(self):
         lead = score_lead(Lead(name="A", phone="123", review_count=30))
         self.assertEqual(lead.website_status, WebsiteStatus.UNKNOWN)
-        self.assertEqual(lead.score, 40)
-        self.assertTrue(any("site ainda não investigado" in r for r in lead.score_reasons))
+        self.assertEqual(lead.opportunity.type.value, "review_needed")
+        self.assertTrue(any("ainda não resolvido" in r for r in lead.score_reasons))
 
-    def test_verified_missing_site_is_rewarded(self):
+    def test_verified_missing_site_is_new_site_opportunity_when_identity_matches(self):
+        from leadflow_agent.models import IdentityStatus
         lead = score_lead(Lead(
             name="A",
-            phone="123",
+            phone="13 99999-1111",
+            socials=["https://instagram.com/a"],
             review_count=30,
             website_status=WebsiteStatus.NOT_FOUND,
+            identity_status=IdentityStatus.MATCHED,
+            identity_confidence=0.99,
         ))
-        self.assertEqual(lead.score, 75)
-        self.assertTrue(any("ausência de site verificada" in r for r in lead.score_reasons))
+        self.assertEqual(lead.opportunity.type.value, "new_site")
+        self.assertTrue(lead.opportunity.actionable)
+        self.assertGreaterEqual(lead.score, 70)
+        self.assertTrue(any("primeiro site" in r for r in lead.score_reasons))
 
     def test_website_auto_marks_present(self):
         lead = Lead(name="A", website="https://a.example")
@@ -234,6 +240,9 @@ class CoreTests(unittest.TestCase):
                 self.assertIn("identity_confidence", columns)
                 self.assertIn("website_audit_score", columns)
                 self.assertIn("website_last_audited_at", columns)
+                self.assertIn("opportunity_type", columns)
+                self.assertIn("opportunity_actionable", columns)
+                self.assertIn("opportunity_service_fit", columns)
             finally:
                 store.close()
 

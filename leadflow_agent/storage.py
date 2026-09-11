@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS leads (
     identity_confidence REAL NOT NULL DEFAULT 0,
     address TEXT,
     confidence_score INTEGER NOT NULL DEFAULT 0,
+    opportunity_type TEXT NOT NULL DEFAULT 'unknown',
+    opportunity_actionable INTEGER NOT NULL DEFAULT 0,
+    opportunity_service_fit TEXT NOT NULL DEFAULT 'unknown',
     website_audit_score INTEGER,
     website_last_audited_at TEXT,
     score INTEGER NOT NULL DEFAULT 0,
@@ -85,6 +88,12 @@ class LeadStore:
             self.conn.execute(
                 "ALTER TABLE leads ADD COLUMN confidence_score INTEGER NOT NULL DEFAULT 0"
             )
+        if "opportunity_type" not in columns:
+            self.conn.execute("ALTER TABLE leads ADD COLUMN opportunity_type TEXT NOT NULL DEFAULT 'unknown'")
+        if "opportunity_actionable" not in columns:
+            self.conn.execute("ALTER TABLE leads ADD COLUMN opportunity_actionable INTEGER NOT NULL DEFAULT 0")
+        if "opportunity_service_fit" not in columns:
+            self.conn.execute("ALTER TABLE leads ADD COLUMN opportunity_service_fit TEXT NOT NULL DEFAULT 'unknown'")
         if "website_audit_score" not in columns:
             self.conn.execute("ALTER TABLE leads ADD COLUMN website_audit_score INTEGER")
         if "website_last_audited_at" not in columns:
@@ -118,9 +127,10 @@ class LeadStore:
                 INSERT INTO leads (
                     lead_key, name, city, state, country, phone, email,
                     website, website_status, identity_status, identity_confidence,
-                    address, confidence_score, website_audit_score, website_last_audited_at,
+                    address, confidence_score, opportunity_type, opportunity_actionable,
+                    opportunity_service_fit, website_audit_score, website_last_audited_at,
                     score, source_provider, payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(lead_key) DO UPDATE SET
                     name=excluded.name,
                     city=excluded.city,
@@ -141,6 +151,9 @@ class LeadStore:
                     identity_confidence=MAX(excluded.identity_confidence, leads.identity_confidence),
                     address=COALESCE(excluded.address, leads.address),
                     confidence_score=MAX(excluded.confidence_score, leads.confidence_score),
+                    opportunity_type=excluded.opportunity_type,
+                    opportunity_actionable=excluded.opportunity_actionable,
+                    opportunity_service_fit=excluded.opportunity_service_fit,
                     website_audit_score=COALESCE(excluded.website_audit_score, leads.website_audit_score),
                     website_last_audited_at=COALESCE(excluded.website_last_audited_at, leads.website_last_audited_at),
                     score=excluded.score,
@@ -153,6 +166,9 @@ class LeadStore:
                     lead.email, lead.website, lead.website_status.value,
                     lead.identity_status.value, lead.identity_confidence, lead.address,
                     lead.confidence_score,
+                    lead.opportunity.type.value if lead.opportunity else "unknown",
+                    int(lead.opportunity.actionable) if lead.opportunity else 0,
+                    lead.opportunity.service_fit if lead.opportunity else "unknown",
                     lead.website_audit.technical_score if lead.website_audit else None,
                     lead.website_audit.audited_at if lead.website_audit else None,
                     lead.score, lead.source_provider, payload,

@@ -224,8 +224,10 @@ class LeadResearchAgent:
 
         leads.sort(
             key=lambda item: (
+                bool(item.opportunity and item.opportunity.actionable),
                 item.score,
                 item.review_count if item.review_count is not None else -1,
+                item.confidence_score,
                 bool(item.phone),
             ),
             reverse=True,

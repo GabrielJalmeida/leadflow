@@ -113,3 +113,10 @@ Discovery and investigation have separate budgets. A normal discovery run does n
 `services/website_auditor.py` is deliberately independent from discovery and entity resolution. It receives a website already attached to a lead and performs a bounded, static HTTP audit. It cannot increase identity confidence merely because a domain responds.
 
 The fetcher manually handles redirects so every redirect target can be checked before access. Localhost, RFC1918/private, link-local, loopback, reserved and other non-global IP targets are blocked to reduce SSRF risk in the local desktop application. Audit results are persisted as part of the lead payload and can be reused from LeadMemory while fresh.
+
+
+## Opportunity Intelligence
+
+`WebsiteAuditor` produces technical facts. `opportunity.assess_opportunity()` converts verified facts into a commercial hypothesis without changing entity identity. The opportunity engine must never treat technical reachability as proof that a domain belongs to a lead.
+
+Final ordering prefers actionable (`matched`/`probable_match`) opportunities before unverified ones. This is intentional: false association is considered worse than missing information. Visual quality is outside the HTTP audit and remains `REVIEW_NEEDED` until a visual/UX audit exists.

@@ -20,6 +20,18 @@ class IdentityStatus(str, Enum):
     MISMATCH = "mismatch"
 
 
+class OpportunityType(str, Enum):
+    """Commercial service opportunity inferred from verified evidence."""
+
+    UNKNOWN = "unknown"
+    NEW_SITE = "new_site"
+    REBUILD = "rebuild"
+    REDESIGN = "redesign"
+    OPTIMIZATION = "optimization"
+    REVIEW_NEEDED = "review_needed"
+    LOW_OPPORTUNITY = "low_opportunity"
+
+
 class WebsiteStatus(str, Enum):
     """Lifecycle state for a lead website.
 
@@ -109,6 +121,20 @@ class WebsiteAudit:
     audited_at: str = field(default_factory=utc_now_iso)
 
 @dataclass(slots=True)
+class OpportunityAssessment:
+    type: OpportunityType = OpportunityType.UNKNOWN
+    score: int = 0
+    actionable: bool = False
+    service_fit: str = "unknown"
+    service_need_score: int = 0
+    contactability_score: int = 0
+    activity_score: int = 0
+    website_health_score: int | None = None
+    reasons: list[str] = field(default_factory=list)
+    cautions: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class Lead:
     name: str
     city: str = ""
@@ -139,6 +165,7 @@ class Lead:
     evidence: list[Evidence] = field(default_factory=list)
     rejected_candidates: list[RejectedCandidate] = field(default_factory=list)
     website_audit: WebsiteAudit | None = None
+    opportunity: OpportunityAssessment | None = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
@@ -277,6 +304,23 @@ def lead_from_dict(data: dict[str, Any]) -> Lead:
         except TypeError:
             continue
     payload["rejected_candidates"] = rejected
+
+    opportunity = payload.get("opportunity")
+    if isinstance(opportunity, dict):
+        allowed = {field_.name for field_ in fields(OpportunityAssessment)}
+        clean_opportunity = {key: value for key, value in opportunity.items() if key in allowed}
+        try:
+            clean_opportunity["type"] = OpportunityType(
+                clean_opportunity.get("type", OpportunityType.UNKNOWN.value)
+            )
+        except (TypeError, ValueError):
+            clean_opportunity["type"] = OpportunityType.UNKNOWN
+        try:
+            payload["opportunity"] = OpportunityAssessment(**clean_opportunity)
+        except TypeError:
+            payload["opportunity"] = None
+    elif not isinstance(opportunity, OpportunityAssessment):
+        payload["opportunity"] = None
 
     audit = payload.get("website_audit")
     if isinstance(audit, dict):

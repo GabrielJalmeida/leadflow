@@ -428,7 +428,12 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
             web = "site ainda não verificado"
         phone = lead.phone or "sem telefone"
         reviews = f"{lead.review_count} reviews" if lead.review_count is not None else "reviews ?"
-        print(f"{idx:>2}. [opp {lead.score:>3} | conf {lead.confidence_score:>3}] {lead.name}")
+        opp_type = lead.opportunity.type.value if lead.opportunity else "unknown"
+        action = "READY" if lead.opportunity and lead.opportunity.actionable else "VERIFY"
+        print(
+            f"{idx:>2}. [opp {lead.score:>3} | conf {lead.confidence_score:>3} | "
+            f"{opp_type} | {action}] {lead.name}"
+        )
         print(f"    {phone} | {web} | {reviews}")
         if lead.address:
             print(f"    {lead.address}")
@@ -452,6 +457,12 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
             )
             if audit.findings:
                 print(f"    Audit findings: {'; '.join(audit.findings[:2])}")
+        if lead.opportunity is not None:
+            print(f"    Oferta sugerida: {lead.opportunity.service_fit}")
+            if lead.opportunity.reasons:
+                print(f"    Opportunity: {lead.opportunity.reasons[-1]}")
+            if lead.opportunity.cautions:
+                print(f"    Atenção: {lead.opportunity.cautions[0]}")
         print(f"    via: {lead.discovered_query}")
 
     csv_path, json_path = export_report(report)

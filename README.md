@@ -181,3 +181,17 @@ Useful options:
 ```
 
 The current `technical_score` is a transparent static-readiness indicator, not an SEO/Lighthouse score and not yet part of the commercial Opportunity Score. A browser-based deep audit can be added later as an optional provider/service.
+
+## Opportunity Intelligence (Phase 5)
+
+LeadFlow no longer assumes that a business without a website is always the best prospect. After discovery, investigation and optional website audit, each lead receives an explainable opportunity assessment:
+
+- `NEW_SITE` — a dedicated investigation found no official website.
+- `REBUILD` — the associated website is unreachable or has severe technical failures.
+- `REDESIGN` — the website works but has a weak technical baseline with clear modernization potential.
+- `OPTIMIZATION` — the website has a reasonable base but still exposes technical/conversion gaps.
+- `REVIEW_NEEDED` — more investigation is required, especially visual/design review.
+
+The score is composed from **service need + contactability + business activity**, while confidence remains separate. A website-specific opportunity is marked `VERIFY` instead of `READY` until entity resolution reaches `matched` or `probable_match`.
+
+Important: the HTTP/HTML website audit does **not** judge aesthetics. Even a `100/100` technical audit can still be a redesign opportunity; it simply needs a later visual/UX assessment.

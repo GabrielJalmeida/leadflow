@@ -28,7 +28,9 @@ def export_report(report: ResearchReport, output_dir: str = "output") -> tuple[P
         writer = csv.DictWriter(
             handle,
             fieldnames=[
-                "score", "confidence_score", "name", "phone", "email", "website", "website_status",
+                "score", "confidence_score", "opportunity_type", "opportunity_actionable",
+                "service_fit", "service_need_score", "contactability_score", "activity_score",
+                "name", "phone", "email", "website", "website_status",
                 "website_audit_score", "website_http_status", "website_https", "website_response_ms",
                 "website_findings", "socials", "address",
                 "city", "state", "categories", "rating", "review_count", "source_provider",
@@ -41,6 +43,12 @@ def export_report(report: ResearchReport, output_dir: str = "output") -> tuple[P
                 {
                     "score": lead.score,
                     "confidence_score": lead.confidence_score,
+                    "opportunity_type": lead.opportunity.type.value if lead.opportunity else "",
+                    "opportunity_actionable": lead.opportunity.actionable if lead.opportunity else "",
+                    "service_fit": lead.opportunity.service_fit if lead.opportunity else "",
+                    "service_need_score": lead.opportunity.service_need_score if lead.opportunity else "",
+                    "contactability_score": lead.opportunity.contactability_score if lead.opportunity else "",
+                    "activity_score": lead.opportunity.activity_score if lead.opportunity else "",
                     "name": lead.name,
                     "phone": lead.phone or "",
                     "email": lead.email or "",

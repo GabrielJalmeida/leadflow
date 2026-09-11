@@ -1,3 +1,12 @@
+
+## [Unreleased] — Phase 5 Opportunity Intelligence
+
+- Replaces the old "no website = best lead" heuristic with an explainable opportunity engine.
+- Adds opportunity types: `new_site`, `rebuild`, `redesign`, `optimization`, `review_needed`.
+- Separates service need, contactability, activity, website health and evidence confidence.
+- Adds an actionability gate: unverified identity/site associations cannot outrank verified commercial opportunities.
+- Treats a 100/100 technical website audit as a healthy technical baseline, not proof of good visual design or positioning.
+- Persists opportunity type/actionability/service fit to SQLite and exports the components to CSV/JSON.
 # Changelog
 
 ## Unreleased — 0.1.4-dev
