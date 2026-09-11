@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from leadflow_agent.http import HTTPError
 from leadflow_agent.models import Lead, SearchGoal, WebHit
 from leadflow_agent.providers.gemini import GeminiPlannerProvider, _extract_generate_text, _extract_json_object
 
@@ -20,6 +21,22 @@ class FakeHttp:
         return self.get_response
 
 
+class FlakyHttp:
+    def __init__(self, failures, response):
+        self.failures = list(failures)
+        self.response = response
+        self.calls = 0
+
+    def post_json(self, url, *, payload, headers=None):
+        self.calls += 1
+        if self.failures:
+            raise self.failures.pop(0)
+        return self.response
+
+    def get_json(self, url, *, params=None, headers=None):
+        return {"models": [{"name": "models/gemini-3.1-flash-lite"}]}
+
+
 class GeminiTests(unittest.TestCase):
     def test_extract_json_code_fence(self):
         self.assertEqual(_extract_json_object('```json\n{"a":1}\n```')["a"], 1)
@@ -32,6 +49,32 @@ class GeminiTests(unittest.TestCase):
         provider = GeminiPlannerProvider("abc", http=FakeHttp())
         ok, _ = provider.validate_key(live_generation=False)
         self.assertTrue(ok)
+
+    def test_retries_transient_503_then_succeeds(self):
+        response = {"candidates": [{"content": {"parts": [{"text": '{"queries":["marcenaria"],"rationale":"ok"}'}]}}]}
+        http = FlakyHttp(
+            [HTTPError("HTTP 503", status_code=503), HTTPError("HTTP 503", status_code=503)],
+            response,
+        )
+        sleeps = []
+        provider = GeminiPlannerProvider(
+            "abc", http=http, retry_attempts=3, retry_base_delay=0.1,
+            sleep_fn=sleeps.append, jitter_fn=lambda: 0.0,
+        )
+        plan = provider.plan_queries(SearchGoal(segment="marcenaria", city="Praia Grande", state="SP"))
+        self.assertEqual(plan.queries[0], "marcenaria")
+        self.assertEqual(http.calls, 3)
+        self.assertEqual(sleeps, [0.1, 0.2])
+
+    def test_does_not_retry_non_transient_400(self):
+        http = FlakyHttp([HTTPError("HTTP 400", status_code=400)], {})
+        provider = GeminiPlannerProvider(
+            "abc", http=http, retry_attempts=3, retry_base_delay=0.1,
+            sleep_fn=lambda _: None, jitter_fn=lambda: 0.0,
+        )
+        with self.assertRaises(HTTPError):
+            provider.plan_queries(SearchGoal(segment="marcenaria", city="Praia Grande", state="SP"))
+        self.assertEqual(http.calls, 1)
 
     def test_planner_generatecontent(self):
         response = {"candidates": [{"content": {"parts": [{"text": '{"queries":["marcenaria","móveis planejados"],"rationale":"x"}'}]}}]}

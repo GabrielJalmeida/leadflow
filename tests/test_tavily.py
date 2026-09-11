@@ -47,6 +47,38 @@ class TavilyTests(unittest.TestCase):
         self.assertEqual(http.posts[0][1]["search_depth"], "basic")
         self.assertEqual(http.posts[0][1]["country"], "brazil")
 
+    def test_heuristic_requires_segment_signal(self):
+        from leadflow_agent.models import WebHit
+        provider = TavilySearchProvider("tvly-test", http=FakeHttp())
+        hits = [WebHit(
+            title="Forte Madeiras",
+            url="https://www.fortemadeiras.com.br",
+            description="Madeiras, ferragens e materiais para profissionais.",
+        )]
+        leads = provider.heuristic_leads(
+            hits, SearchGoal(segment="marcenaria", city="Praia Grande", state="SP"), query="marcenaria"
+        )
+        self.assertEqual(leads, [])
+
+    def test_heuristic_skips_social_reels_and_posts(self):
+        provider = TavilySearchProvider("tvly-test", http=FakeHttp())
+        hits = [
+            __import__("leadflow_agent.models", fromlist=["WebHit"]).WebHit(
+                title="Conheça a Forte Madeiras, a loja mais completa e a ...",
+                url="https://www.instagram.com/reel/DSGL728kZ9S",
+                description="telefone (13) 99794-3496",
+            ),
+            __import__("leadflow_agent.models", fromlist=["WebHit"]).WebHit(
+                title="Instagram",
+                url="https://www.instagram.com/p/DFvkz7zRO-k",
+                description="telefone (13) 3494-2931",
+            ),
+        ]
+        leads = provider.heuristic_leads(
+            hits, SearchGoal(segment="marcenaria", city="Praia Grande", state="SP"), query="marcenaria"
+        )
+        self.assertEqual(leads, [])
+
     def test_heuristic_skips_directory_and_extracts_direct_profile(self):
         provider = TavilySearchProvider("tvly-test", http=FakeHttp())
         hits = provider.search_web('"marcenaria" "Praia Grande"', count=10)

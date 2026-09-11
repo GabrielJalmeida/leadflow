@@ -53,6 +53,16 @@ class FakeWebDiscovery:
         return [Lead(name="Empresa A", city=goal.city, state=goal.state, phone="13 99999-1111", source_provider=self.name, discovered_query=query)]
 
 
+class FakeBadWebDiscovery:
+    name = "fake-web"
+
+    def search_web(self, query, *, country="BR", count=10):
+        return [WebHit(title="Instagram", url="https://instagram.com/p/abc", description="", query=query)]
+
+    def heuristic_leads(self, hits, goal, *, query):
+        return [Lead(name="Instagram", city=goal.city, state=goal.state, source_provider=self.name, provider_url=hits[0].url)]
+
+
 class FakeExtractor:
     name = "fake-extractor"
 
@@ -134,6 +144,13 @@ class CoreTests(unittest.TestCase):
         report = agent.research(SearchGoal(segment="marcenaria", city="Praia Grande", state="SP", limit=3))
         self.assertEqual(len(report.leads), 3)
         self.assertEqual(report.local_results_seen, 2)
+
+    def test_agent_quality_gate_rejects_generic_platform_candidate(self):
+        web = FakeBadWebDiscovery()
+        agent = LeadResearchAgent(web_search=web, llm=FakeLLM())
+        report = agent.research(SearchGoal(segment="marcenaria", city="Praia Grande", state="SP", limit=1))
+        self.assertEqual(report.leads, [])
+        self.assertGreaterEqual(report.quality_rejected, 1)
 
     def test_agent_web_discovery_has_heuristic_fallback(self):
         web = FakeWebDiscovery()

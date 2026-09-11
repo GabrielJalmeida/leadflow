@@ -335,6 +335,10 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
     print(f"Resultados-fonte vistos:   {report.local_results_seen}")
     print(f"Duplicatas removidas:      {report.duplicates_removed}")
     print(f"Leads entregues:           {len(report.leads)} / {goal.limit}")
+    if report.quality_rejected:
+        print(f"Candidatos descartados:    {report.quality_rejected} (quality gate)")
+    if report.invalid_fields_removed:
+        print(f"Campos inválidos removidos:{report.invalid_fields_removed:>5}")
     if args.investigate:
         print(f"Leads investigados:        {report.investigated_leads}")
         print(f"Buscas de investigação:    {report.investigation_searches}")

@@ -9,12 +9,25 @@ class BasicQueryPlanner:
 
     def plan_queries(self, goal: SearchGoal, *, max_queries: int = 6) -> QueryPlan:
         base = goal.segment.strip()
-        candidates = [
-            base,
-            f"{base} serviços",
-            f"{base} empresa",
-            f"{base} profissional",
-        ]
+        folded = base.casefold()
+        if "marcenar" in folded:
+            candidates = [
+                base,
+                "móveis planejados",
+                "marceneiro",
+                "fabricação de móveis sob medida",
+                "marcenaria artesanal",
+                "projetos de marcenaria",
+            ]
+        else:
+            # Generic fallback stays deterministic and useful without pretending
+            # to know domain-specific synonyms for every possible segment.
+            candidates = [
+                base,
+                f"{base} orçamento",
+                f"{base} serviços",
+                f"{base} atendimento",
+            ]
         clean: list[str] = []
         for query in candidates:
             query = " ".join(query.split())

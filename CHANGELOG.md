@@ -47,3 +47,12 @@
 ## 0.1.1
 
 - Gemini-first grounding experiment; retired as the default path after API-tier quota testing.
+
+### v0.1.4-dev Phase 3.2 — Resilience & Quality Guardrails
+- Gemini generation now retries transient 429/5xx failures with exponential backoff and jitter.
+- HTTP errors expose structured status codes so retry policy is explicit instead of string-parsed.
+- Deterministic fallback no longer promotes Instagram/TikTok/etc. posts or reels as businesses.
+- Added a conservative lead quality gate to reject platform labels, marketing-copy titles, truncated titles, and directory pages masquerading as companies.
+- Invalid Brazilian phone shapes are removed before dedupe/storage and again after memory hydration.
+- Basic planner fallback now uses useful woodworking synonyms for `marcenaria` instead of low-value `empresa/profissional` suffixes.
+- Research reports expose rejected-candidate and invalid-field counters.

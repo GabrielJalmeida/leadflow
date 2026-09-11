@@ -9,3 +9,6 @@ output/
 .coverage
 .pytest_cache/
 .DS_Store
+
+# Local development patches
+*.patch

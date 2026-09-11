@@ -181,6 +181,8 @@ class ResearchReport:
     memory_hits: int = 0
     memory_fields_restored: int = 0
     memory_rejections_restored: int = 0
+    quality_rejected: int = 0
+    invalid_fields_removed: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -201,6 +203,8 @@ class ResearchReport:
             "memory_hits": self.memory_hits,
             "memory_fields_restored": self.memory_fields_restored,
             "memory_rejections_restored": self.memory_rejections_restored,
+            "quality_rejected": self.quality_rejected,
+            "invalid_fields_removed": self.invalid_fields_removed,
         }
 
 

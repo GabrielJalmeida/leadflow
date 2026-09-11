@@ -5,6 +5,7 @@ from .enrichment import enrich_lead_from_web
 from .models import Lead, ResearchReport, SearchGoal, utc_now_iso
 from .memory import LeadMemory
 from .planner import build_plan
+from .quality import assess_lead_quality, sanitize_lead_fields
 from .providers.base import LeadExtractorProvider, LLMProvider, LocalSearchProvider, WebSearchProvider
 from .scoring import score_lead
 from .services.investigator import LeadInvestigator
@@ -48,6 +49,8 @@ class LeadResearchAgent:
         queries_executed: list[str] = []
         source_results_seen = 0
         duplicates_removed = 0
+        quality_rejected = 0
+        invalid_fields_removed = 0
         errors: list[str] = []
 
         for query in plan.queries:
@@ -96,6 +99,11 @@ class LeadResearchAgent:
                         errors.append(f"{query}: heuristic extraction failed: {exc}")
 
             for lead in found:
+                invalid_fields_removed += sanitize_lead_fields(lead)
+                quality = assess_lead_quality(lead, segment=goal.segment)
+                if not quality.accepted:
+                    quality_rejected += 1
+                    continue
                 if goal.require_phone and not lead.phone:
                     continue
                 key = lead_key(lead)
@@ -121,6 +129,8 @@ class LeadResearchAgent:
                     memory_hits += 1
                     memory_fields_restored += memory.fields_restored
                     memory_rejections_restored += memory.rejected_restored
+                    # Old cached/memorized data may predate newer validators.
+                    invalid_fields_removed += sanitize_lead_fields(lead)
 
         if enrich_web and self.web_search is not None:
             candidates = leads if enrichment_limit is None else leads[: max(0, enrichment_limit)]
@@ -205,6 +215,8 @@ class LeadResearchAgent:
             memory_hits=memory_hits,
             memory_fields_restored=memory_fields_restored,
             memory_rejections_restored=memory_rejections_restored,
+            quality_rejected=quality_rejected,
+            invalid_fields_removed=invalid_fields_removed,
         )
 
 

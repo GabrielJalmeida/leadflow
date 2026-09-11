@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import random
 import re
-from typing import Any
+import time
+from typing import Any, Callable
 
-from ..http import JsonHttpClient
+from ..http import HTTPError, JsonHttpClient
 from ..models import Evidence, InvestigationCandidate, Lead, QueryPlan, SearchGoal, WebHit, WebsiteStatus
 
 
@@ -19,12 +21,26 @@ class GeminiPlannerProvider:
     name = "gemini"
     MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
-    def __init__(self, api_key: str, *, model: str = "gemini-3.1-flash-lite", http: JsonHttpClient | None = None):
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        model: str = "gemini-3.1-flash-lite",
+        http: JsonHttpClient | None = None,
+        retry_attempts: int = 3,
+        retry_base_delay: float = 0.4,
+        sleep_fn: Callable[[float], None] = time.sleep,
+        jitter_fn: Callable[[], float] = random.random,
+    ):
         if not api_key.strip():
             raise ValueError("Gemini API key is required.")
         self.api_key = api_key.strip()
         self.model = model.strip() or "gemini-3.1-flash-lite"
         self.http = http or JsonHttpClient(timeout=45)
+        self.retry_attempts = max(1, min(int(retry_attempts), 5))
+        self.retry_base_delay = max(0.0, float(retry_base_delay))
+        self.sleep_fn = sleep_fn
+        self.jitter_fn = jitter_fn
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -68,7 +84,24 @@ class GeminiPlannerProvider:
                 "responseMimeType": "application/json" if max_output_tokens > 8 else "text/plain",
             },
         }
-        return self.http.post_json(self._generate_url, payload=payload, headers=self._headers)
+
+        last_error: Exception | None = None
+        for attempt in range(self.retry_attempts):
+            try:
+                return self.http.post_json(self._generate_url, payload=payload, headers=self._headers)
+            except HTTPError as exc:
+                last_error = exc
+                if exc.status_code not in {429, 500, 502, 503, 504} or attempt >= self.retry_attempts - 1:
+                    raise
+                delay = self.retry_base_delay * (2 ** attempt)
+                # Small jitter prevents synchronized retries when many local jobs
+                # fail at the same provider spike. Deterministic tests inject 0.0.
+                delay += self.retry_base_delay * 0.25 * max(0.0, min(self.jitter_fn(), 1.0))
+                if delay > 0:
+                    self.sleep_fn(delay)
+
+        assert last_error is not None
+        raise last_error
 
 
     def extract_leads(
