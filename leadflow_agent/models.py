@@ -297,6 +297,8 @@ class ResearchReport:
     visual_audits_run: int = 0
     visual_audits_reused: int = 0
     visual_audit_errors: int = 0
+    filter_candidates_seen: int = 0
+    filter_rejected: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -328,6 +330,8 @@ class ResearchReport:
             "visual_audits_run": self.visual_audits_run,
             "visual_audits_reused": self.visual_audits_reused,
             "visual_audit_errors": self.visual_audit_errors,
+            "filter_candidates_seen": self.filter_candidates_seen,
+            "filter_rejected": self.filter_rejected,
         }
 
 

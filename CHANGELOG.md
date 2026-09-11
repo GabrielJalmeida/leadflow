@@ -97,3 +97,11 @@
 - Added persistent visual-audit memory (14-day default) and SQLite/CSV/JSON fields.
 - Opportunity Intelligence can now identify redesign opportunities even when technical/browser checks are healthy.
 - Visual analysis never changes business identity or technical audit facts.
+
+## v0.1.4-dev — Phase 7: Search Profiles & Filters
+
+- Added curated segment presets while preserving unrestricted free-text segment search.
+- Added reusable search profiles (`balanced`, `website-sales`, `new-site`, `redesign`, `visual-redesign`, `ready-only`, `instagram-first`, `phone-first`).
+- Added post-qualification filters for website state, Instagram, phone, email, readiness, opportunity type and audit thresholds.
+- Added a bounded candidate-pool multiplier so filtered searches can inspect more candidates without silently becoming unbounded.
+- Added `segments` and `profiles` CLI discovery commands.

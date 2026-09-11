@@ -250,3 +250,24 @@ Visual Intelligence reports independent 0–100 dimensions for overall presentat
 Important: a visual score is **not** a purchase probability and is not a technical score. It is an AI-assisted review of the screenshots. Technical Health, Browser UX, Visual Quality, Identity Confidence and Opportunity Fit remain separate signals.
 
 Recent visual audits are reused for 14 days by default. Use `--refresh-visual-audits` to force a new review.
+
+### Search profiles and advanced filters
+
+LeadFlow keeps free-text search, but now also exposes curated segment presets and reusable qualification profiles:
+
+```bat
+python -m leadflow_agent segments
+python -m leadflow_agent profiles
+```
+
+Examples:
+
+```bat
+python -m leadflow_agent search --segment marcenaria --city "Praia Grande" --state SP --profile new-site --investigate
+```
+
+```bat
+python -m leadflow_agent search --segment marcenaria --city "Praia Grande" --state SP --profile visual-redesign --audit-websites --browser-audit --visual-audit --max-visual-score 60
+```
+
+Profiles are defaults, not restrictions: advanced flags can override website state, Instagram/phone/e-mail presence, READY/VERIFY state, opportunity types and technical/browser/visual score thresholds. Custom segments remain valid even when they are not in the preset catalog.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .dedupe import lead_key, merge_leads
 from .enrichment import enrich_lead_from_web
+from .filters import LeadFilterSpec, assess_filter
 from .models import Lead, ResearchReport, SearchGoal, utc_now_iso
 from .memory import LeadMemory
 from .planner import build_plan
@@ -65,11 +66,16 @@ class LeadResearchAgent:
         visual_audit_limit: int | None = 3,
         visual_audit_ttl_days: int = 14,
         refresh_visual_audits: bool = False,
+        lead_filter: LeadFilterSpec | None = None,
+        filter_pool_multiplier: int = 2,
     ) -> ResearchReport:
         started = utc_now_iso()
         cache_before = _cache_snapshot(self.web_search)
         plan = build_plan(goal, self.llm, max_queries=max_queries)
         unique: dict[str, Lead] = {}
+        target_pool = goal.limit
+        if lead_filter is not None and lead_filter.active:
+            target_pool = min(1000, max(goal.limit, goal.limit * max(1, int(filter_pool_multiplier))))
         queries_executed: list[str] = []
         source_results_seen = 0
         duplicates_removed = 0
@@ -78,9 +84,9 @@ class LeadResearchAgent:
         errors: list[str] = []
 
         for query in plan.queries:
-            if len(unique) >= goal.limit:
+            if len(unique) >= target_pool:
                 break
-            remaining = max(1, goal.limit - len(unique))
+            remaining = max(1, target_pool - len(unique))
             queries_executed.append(query)
 
             if self.local_search is not None:
@@ -319,6 +325,17 @@ class LeadResearchAgent:
         for lead in leads:
             score_lead(lead, prefer_no_website=goal.prefer_no_website)
 
+        filter_candidates_seen = len(leads)
+        filter_rejected = 0
+        if lead_filter is not None and lead_filter.active:
+            accepted: list[Lead] = []
+            for lead in leads:
+                if assess_filter(lead, lead_filter).accepted:
+                    accepted.append(lead)
+                else:
+                    filter_rejected += 1
+            leads = accepted
+
         leads.sort(
             key=lambda item: (
                 bool(item.opportunity and item.opportunity.actionable),
@@ -368,6 +385,8 @@ class LeadResearchAgent:
             visual_audits_run=visual_audits_run,
             visual_audits_reused=visual_audits_reused,
             visual_audit_errors=visual_audit_errors,
+            filter_candidates_seen=filter_candidates_seen,
+            filter_rejected=filter_rejected,
         )
 
 

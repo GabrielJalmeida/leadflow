@@ -10,7 +10,10 @@ from .agent import LeadResearchAgent
 from .cache import CachedWebSearchProvider, PersistentSearchCache
 from .config import Settings
 from .export import export_report
-from .models import SearchGoal
+from .models import OpportunityType, SearchGoal, WebsiteStatus
+from .filters import LeadFilterSpec, Presence, Readiness
+from .profiles import PROFILES, get_profile
+from .segments import grouped_segments, resolve_segment
 from .memory import LeadMemory
 from .providers.brave import BraveSearchProvider
 from .providers.gemini import GeminiPlannerProvider
@@ -37,6 +40,8 @@ def _parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="Valida Gemini e providers BYOK sem expor chaves.")
     doctor.add_argument("--offline", action="store_true", help="Não faz validações de rede.")
     sub.add_parser("setup", help="Cria um .env local de forma interativa.")
+    sub.add_parser("segments", help="Lista segmentos pré-selecionados; busca livre continua disponível.")
+    sub.add_parser("profiles", help="Lista perfis prontos de qualificação/filtro.")
 
     search = sub.add_parser("search", help="Pesquisa leads reais.")
     search.add_argument("--segment", required=True, help='Ex.: "marcenaria"')
@@ -45,6 +50,20 @@ def _parser() -> argparse.ArgumentParser:
     search.add_argument("--country", default="Brazil")
     search.add_argument("--limit", type=int, default=10)
     search.add_argument("--max-queries", type=int, default=6)
+    search.add_argument("--profile", default="balanced", help="Perfil pronto; use `leadflow profiles` para listar.")
+    search.add_argument("--website", choices=["any", "present", "not_found", "unknown", "unreachable"], default=None, help="Filtro de estado do website.")
+    search.add_argument("--instagram", choices=["any", "present", "missing"], default=None, help="Exige ou exclui Instagram.")
+    search.add_argument("--phone-filter", choices=["any", "present", "missing"], default=None, help="Filtro de telefone sem alterar o discovery provider.")
+    search.add_argument("--email-filter", choices=["any", "present", "missing"], default=None, help="Filtro de e-mail.")
+    search.add_argument("--readiness", choices=["any", "ready", "verify"], default=None, help="READY = identidade suficiente para abordagem; VERIFY = revisar antes.")
+    search.add_argument("--opportunity", action="append", choices=[item.value for item in OpportunityType if item != OpportunityType.UNKNOWN], help="Filtra tipos de oportunidade; pode repetir a flag.")
+    search.add_argument("--min-opportunity-score", type=int, default=None)
+    search.add_argument("--max-technical-score", type=int, default=None, help="Ex.: <=60 para sites tecnicamente fracos. Exige website audit.")
+    search.add_argument("--max-browser-score", type=int, default=None, help="Ex.: <=60 para UX objetiva fraca. Exige browser audit.")
+    search.add_argument("--max-visual-score", type=int, default=None, help="Ex.: <=60 para visual fraco. Exige visual audit.")
+    search.add_argument("--min-visual-confidence", type=int, default=55, help="Confiança visual mínima em %% quando --max-visual-score é usado.")
+    search.add_argument("--require-any-contact", action="store_true", help="Exige pelo menos telefone, e-mail ou social.")
+    search.add_argument("--filter-pool-multiplier", type=int, default=2, help="Quando há filtros, tenta descobrir até N×limit candidatos antes de filtrar (1-5).")
     search.add_argument("--require-phone", action="store_true")
     search.add_argument("--enrich-web", action="store_true", help="Faz buscas extras por empresa para site/social.")
     search.add_argument("--enrichment-limit", type=int, default=None)
@@ -338,9 +357,67 @@ def _build_agent(
     raise RuntimeError("Nenhum provider de busca configurado. Rode `python -m leadflow_agent setup`.")
 
 
+def _print_segments() -> int:
+    print("Segmentos pré-selecionados (você também pode digitar qualquer ramo livremente):")
+    for category, items in grouped_segments().items():
+        print(f"\n{category}")
+        for item in items:
+            print(f"  {item.slug:<22} {item.label}")
+    return 0
+
+
+def _print_profiles() -> int:
+    print("Perfis de busca/qualificação:")
+    for profile in PROFILES.values():
+        print(f"  {profile.slug:<16} {profile.label} — {profile.description}")
+    print("\nPerfis são defaults; flags avançadas sobrescrevem os filtros do perfil.")
+    return 0
+
+
+def _build_filter_spec(args: argparse.Namespace) -> LeadFilterSpec:
+    spec = get_profile(args.profile).filters()
+    if args.website and args.website != "any":
+        spec.website_states = {WebsiteStatus(args.website)}
+    elif args.website == "any":
+        spec.website_states.clear()
+    if args.instagram is not None:
+        spec.instagram = Presence(args.instagram)
+    if args.phone_filter is not None:
+        spec.phone = Presence(args.phone_filter)
+    if args.email_filter is not None:
+        spec.email = Presence(args.email_filter)
+    if args.readiness is not None:
+        spec.readiness = Readiness(args.readiness)
+    if args.opportunity:
+        spec.opportunity_types = {OpportunityType(item) for item in args.opportunity}
+    if args.min_opportunity_score is not None:
+        spec.min_opportunity_score = args.min_opportunity_score
+    if args.max_technical_score is not None:
+        spec.max_technical_score = args.max_technical_score
+    if args.max_browser_score is not None:
+        spec.max_browser_score = args.max_browser_score
+    if args.max_visual_score is not None:
+        spec.max_visual_score = args.max_visual_score
+    spec.min_visual_confidence = args.min_visual_confidence / 100.0
+    if args.require_any_contact:
+        spec.require_any_contact = True
+    return spec
+
+
 def _search(args: argparse.Namespace, settings: Settings) -> int:
     if args.limit < 1 or args.limit > 1000:
         print("--limit deve ficar entre 1 e 1000.", file=sys.stderr)
+        return 2
+    if args.filter_pool_multiplier < 1 or args.filter_pool_multiplier > 5:
+        print("--filter-pool-multiplier deve ficar entre 1 e 5.", file=sys.stderr)
+        return 2
+    for name in ("min_opportunity_score", "max_technical_score", "max_browser_score", "max_visual_score", "min_visual_confidence"):
+        value = getattr(args, name)
+        if value is not None and not 0 <= value <= 100:
+            print(f"--{name.replace('_','-')} deve ficar entre 0 e 100.", file=sys.stderr)
+            return 2
+    if args.profile not in PROFILES:
+        print(f"Perfil desconhecido: {args.profile}. Rode `python -m leadflow_agent profiles`.", file=sys.stderr)
         return 2
     if args.investigation_budget < 1 or args.investigation_budget > 3:
         print("--investigation-budget deve ficar entre 1 e 3.", file=sys.stderr)
@@ -399,8 +476,12 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
+    preset = resolve_segment(args.segment)
+    segment_value = preset.label if preset is not None else args.segment
+    lead_filter = _build_filter_spec(args)
+
     goal = SearchGoal(
-        segment=args.segment,
+        segment=segment_value,
         city=args.city,
         state=args.state,
         country=args.country,
@@ -411,6 +492,9 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
 
     ai_mode = "Gemini" if (settings.gemini_api_key and not args.no_ai) else "Basic"
     print(f"Meta: encontrar {goal.limit} leads para '{goal.segment}' em {goal.location_label}")
+    if preset is not None:
+        print(f"Segment preset: {preset.slug} ({preset.category})")
+    print(f"Perfil: {args.profile}{' + filtros avançados' if lead_filter.active else ''}")
     print(f"Cérebro/extrator: {ai_mode}")
     print(f"Busca: {selected}")
     if args.no_cache:
@@ -470,6 +554,8 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
         visual_audit_limit=args.visual_audit_limit,
         visual_audit_ttl_days=args.visual_audit_ttl_days,
         refresh_visual_audits=args.refresh_visual_audits,
+        lead_filter=lead_filter,
+        filter_pool_multiplier=args.filter_pool_multiplier,
     )
 
     print(f"Planner: {report.plan.generated_by}")
@@ -483,6 +569,9 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
     print(f"Resultados-fonte vistos:   {report.local_results_seen}")
     print(f"Duplicatas removidas:      {report.duplicates_removed}")
     print(f"Leads entregues:           {len(report.leads)} / {goal.limit}")
+    if lead_filter.active:
+        print(f"Candidatos antes do filtro:{report.filter_candidates_seen:>5}")
+        print(f"Filtrados pelos critérios: {report.filter_rejected:>5}")
     if report.quality_rejected:
         print(f"Candidatos descartados:    {report.quality_rejected} (quality gate)")
     if report.invalid_fields_removed:
@@ -607,6 +696,10 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "setup":
         return _write_env_interactive(Path(".env"))
+    if args.command == "segments":
+        return _print_segments()
+    if args.command == "profiles":
+        return _print_profiles()
 
     settings = Settings.load()
     if args.command == "doctor":
