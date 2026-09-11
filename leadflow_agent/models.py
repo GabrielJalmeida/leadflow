@@ -120,6 +120,27 @@ class WebsiteAudit:
     error: str | None = None
     audited_at: str = field(default_factory=utc_now_iso)
 
+
+
+@dataclass(slots=True)
+class BrowserAudit:
+    requested_url: str
+    final_url: str
+    loaded: bool
+    status_code: int | None = None
+    mobile_overflow: bool = False
+    visible_contact_cta_count: int = 0
+    nav_link_count: int = 0
+    console_error_count: int = 0
+    page_error_count: int = 0
+    ux_score: int = 0
+    desktop_screenshot: str | None = None
+    mobile_screenshot: str | None = None
+    findings: list[str] = field(default_factory=list)
+    error: str | None = None
+    audited_at: str = field(default_factory=utc_now_iso)
+
+
 @dataclass(slots=True)
 class OpportunityAssessment:
     type: OpportunityType = OpportunityType.UNKNOWN
@@ -165,6 +186,7 @@ class Lead:
     evidence: list[Evidence] = field(default_factory=list)
     rejected_candidates: list[RejectedCandidate] = field(default_factory=list)
     website_audit: WebsiteAudit | None = None
+    browser_audit: BrowserAudit | None = None
     opportunity: OpportunityAssessment | None = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
@@ -239,6 +261,9 @@ class ResearchReport:
     website_audits_run: int = 0
     website_audits_reused: int = 0
     website_audit_errors: int = 0
+    browser_audits_run: int = 0
+    browser_audits_reused: int = 0
+    browser_audit_errors: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -264,6 +289,9 @@ class ResearchReport:
             "website_audits_run": self.website_audits_run,
             "website_audits_reused": self.website_audits_reused,
             "website_audit_errors": self.website_audit_errors,
+            "browser_audits_run": self.browser_audits_run,
+            "browser_audits_reused": self.browser_audits_reused,
+            "browser_audit_errors": self.browser_audit_errors,
         }
 
 
@@ -333,6 +361,18 @@ def lead_from_dict(data: dict[str, Any]) -> Lead:
             payload["website_audit"] = None
     elif not isinstance(audit, WebsiteAudit):
         payload["website_audit"] = None
+
+    browser_audit = payload.get("browser_audit")
+    if isinstance(browser_audit, dict):
+        allowed = {field_.name for field_ in fields(BrowserAudit)}
+        try:
+            payload["browser_audit"] = BrowserAudit(
+                **{key: value for key, value in browser_audit.items() if key in allowed}
+            )
+        except TypeError:
+            payload["browser_audit"] = None
+    elif not isinstance(browser_audit, BrowserAudit):
+        payload["browser_audit"] = None
 
     allowed_lead = {field_.name for field_ in fields(Lead)}
     clean = {key: value for key, value in payload.items() if key in allowed_lead}

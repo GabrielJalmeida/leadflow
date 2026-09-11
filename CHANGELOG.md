@@ -77,3 +77,14 @@
 - Added `--audit-limit`, `--audit-timeout`, `--audit-ttl-days` and `--refresh-audits`.
 - Added CSV/JSON audit fields and terminal summaries.
 - Added unit coverage for public/private URL validation, unreachable sites, safety blocking, signal extraction and memory reuse.
+
+## v0.1.4-dev — Phase 6A: Browser & UX Intelligence
+
+- Added an optional Playwright/Chromium browser audit for websites already associated with leads.
+- Keeps browser UX separate from static technical health and future visual/aesthetic scoring.
+- Measures mobile horizontal overflow, visible above-the-fold contact CTAs, navigation links, console errors and page errors.
+- Captures desktop and mobile full-page screenshots for later human/AI visual review.
+- Reuses browser audits from lead memory for 7 days by default and persists `browser_ux_score` in SQLite/JSON/CSV.
+- Adds SSRF-oriented request routing so browser requests to localhost/private/non-public addresses are aborted.
+- Browser UX can upgrade a technically healthy website into `REDESIGN` or `OPTIMIZATION` when objective mobile/conversion friction is detected.
+- Playwright remains an optional dependency; normal discovery/investigation/HTTP audit still works without it.

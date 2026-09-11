@@ -161,6 +161,17 @@ def _service_need(
             cautions.append(f"falha observada: {audit.error}")
         return OpportunityType.REBUILD, "website_rebuild", 55, reasons, cautions
 
+    browser = lead.browser_audit
+    if browser is not None and browser.loaded:
+        if browser.ux_score <= 40:
+            reasons.append(f"browser UX {browser.ux_score}/100: problemas severos de experiência mobile/conversão +46")
+            cautions.append("avaliação visual/estética ainda não foi realizada")
+            return OpportunityType.REDESIGN, "website_redesign", 46, reasons, cautions
+        if browser.ux_score <= 65:
+            reasons.append(f"browser UX {browser.ux_score}/100: fricções de mobile/CTA detectadas +34")
+            cautions.append("estética e posicionamento visual ainda exigem revisão")
+            return OpportunityType.OPTIMIZATION, "website_optimization", 34, reasons, cautions
+
     score = audit.technical_score
     if score <= 30:
         reasons.append(f"website health {score}/100: problemas técnicos severos +50")
@@ -177,7 +188,10 @@ def _service_need(
         return OpportunityType.REVIEW_NEEDED, "visual_review", 20, reasons, cautions
 
     reasons.append(f"website health {score}/100: baseline técnico saudável +10")
-    cautions.append("100/100 técnico não mede design, estética, conteúdo ou competitividade")
+    if browser is not None:
+        cautions.append(f"browser UX {browser.ux_score}/100; estética/branding ainda não foram avaliados")
+    else:
+        cautions.append("100/100 técnico não mede design, estética, conteúdo ou competitividade")
     return OpportunityType.REVIEW_NEEDED, "visual_review", 10, reasons, cautions
 
 

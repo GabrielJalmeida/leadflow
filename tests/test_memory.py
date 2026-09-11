@@ -7,6 +7,7 @@ from pathlib import Path
 
 from leadflow_agent.memory import LeadMemory
 from leadflow_agent.models import (
+    BrowserAudit,
     Evidence,
     IdentityStatus,
     Lead,
@@ -177,6 +178,38 @@ class MemoryTests(unittest.TestCase):
             self.assertTrue(result.matched)
             self.assertIsNotNone(current.website_audit)
             self.assertEqual(current.website_audit.technical_score, 90)
+
+
+    def test_recent_browser_audit_is_restored_for_same_domain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = str(Path(tmp) / "leadflow.db")
+            stored = Lead(
+                name="Empresa Browser Auditada",
+                city="Praia Grande",
+                state="SP",
+                provider_url="https://instagram.com/empresa-browser",
+                website="https://empresa.example",
+                field_confidence={"website": 0.95},
+                browser_audit=BrowserAudit(
+                    requested_url="https://empresa.example",
+                    final_url="https://empresa.example",
+                    loaded=True,
+                    status_code=200,
+                    ux_score=74,
+                ),
+            )
+            self._save(db, stored)
+            current = Lead(
+                name="Empresa Browser Auditada",
+                city="Praia Grande",
+                state="SP",
+                provider_url="https://instagram.com/empresa-browser",
+                website="https://empresa.example",
+            )
+            result = LeadMemory(db).hydrate(current)
+            self.assertTrue(result.matched)
+            self.assertIsNotNone(current.browser_audit)
+            self.assertEqual(current.browser_audit.ux_score, 74)
 
     def test_stale_not_found_state_returns_to_unknown(self):
         with tempfile.TemporaryDirectory() as tmp:

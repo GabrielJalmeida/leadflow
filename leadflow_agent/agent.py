@@ -10,6 +10,7 @@ from .providers.base import LeadExtractorProvider, LLMProvider, LocalSearchProvi
 from .scoring import score_lead
 from .services.investigator import LeadInvestigator
 from .services.website_auditor import WebsiteAuditor
+from .services.browser_auditor import BrowserAuditor
 
 
 class LeadResearchAgent:
@@ -23,6 +24,7 @@ class LeadResearchAgent:
         investigator: LeadInvestigator | None = None,
         lead_memory: LeadMemory | None = None,
         website_auditor: WebsiteAuditor | None = None,
+        browser_auditor: BrowserAuditor | None = None,
     ):
         if local_search is None and web_search is None:
             raise ValueError("LeadResearchAgent requires a local or web search provider.")
@@ -33,6 +35,7 @@ class LeadResearchAgent:
         self.investigator = investigator
         self.lead_memory = lead_memory
         self.website_auditor = website_auditor
+        self.browser_auditor = browser_auditor
 
     def research(
         self,
@@ -49,6 +52,12 @@ class LeadResearchAgent:
         audit_timeout: float = 8.0,
         audit_ttl_days: int = 7,
         refresh_audits: bool = False,
+        browser_audit: bool = False,
+        browser_audit_limit: int | None = 3,
+        browser_timeout: float = 12.0,
+        browser_audit_ttl_days: int = 7,
+        refresh_browser_audits: bool = False,
+        browser_artifacts_dir: str = "output/browser-audits",
     ) -> ResearchReport:
         started = utc_now_iso()
         cache_before = _cache_snapshot(self.web_search)
@@ -217,8 +226,44 @@ class LeadResearchAgent:
                         website_audit_errors += 1
                         errors.append(f"{lead.name}: website audit failed: {exc}")
 
-        # Re-score after enrichment/investigation/audit because verified fields
-        # and website availability can materially change the opportunity score.
+        browser_audits_run = 0
+        browser_audits_reused = 0
+        browser_audit_errors = 0
+        if browser_audit:
+            if self.browser_auditor is None:
+                errors.append("browser audit requested but no browser auditor is configured")
+            else:
+                browser_candidates = [lead for lead in leads if lead.website and lead.website_status.value == "present"]
+                browser_candidates.sort(
+                    key=lambda item: (
+                        item.identity_confidence,
+                        item.confidence_score,
+                        item.score,
+                    ),
+                    reverse=True,
+                )
+                cap = len(browser_candidates) if browser_audit_limit is None else max(0, int(browser_audit_limit))
+                for lead in browser_candidates[:cap]:
+                    try:
+                        outcome = self.browser_auditor.audit(
+                            lead,
+                            timeout=browser_timeout,
+                            max_age_days=browser_audit_ttl_days,
+                            force=refresh_browser_audits,
+                            artifacts_dir=browser_artifacts_dir,
+                        )
+                        if outcome.reused:
+                            browser_audits_reused += 1
+                        else:
+                            browser_audits_run += 1
+                        if outcome.audit.error or not outcome.audit.loaded:
+                            browser_audit_errors += 1
+                    except Exception as exc:
+                        browser_audit_errors += 1
+                        errors.append(f"{lead.name}: browser audit failed: {exc}")
+
+        # Re-score after enrichment/investigation/audits because verified fields
+        # and browser behaviour can materially change the opportunity score.
         for lead in leads:
             score_lead(lead, prefer_no_website=goal.prefer_no_website)
 
@@ -265,6 +310,9 @@ class LeadResearchAgent:
             website_audits_run=website_audits_run,
             website_audits_reused=website_audits_reused,
             website_audit_errors=website_audit_errors,
+            browser_audits_run=browser_audits_run,
+            browser_audits_reused=browser_audits_reused,
+            browser_audit_errors=browser_audit_errors,
         )
 
 

@@ -4,6 +4,7 @@ from leadflow_agent.models import (
     IdentityStatus,
     Lead,
     OpportunityType,
+    BrowserAudit,
     WebsiteAudit,
     WebsiteStatus,
     lead_from_dict,
@@ -86,6 +87,37 @@ class OpportunityIntelligenceTests(unittest.TestCase):
         self.assertEqual(lead.opportunity.type, OpportunityType.REVIEW_NEEDED)
         self.assertEqual(lead.opportunity.service_fit, "visual_review")
         self.assertTrue(any("não mede design" in c for c in lead.opportunity.cautions))
+
+
+    def test_browser_ux_can_reveal_redesign_need_on_technically_healthy_site(self):
+        lead = Lead(
+            name="Healthy but awkward",
+            phone="13 3333-1111",
+            website="https://healthy.example",
+            identity_status=IdentityStatus.MATCHED,
+            identity_confidence=0.99,
+            website_audit=WebsiteAudit(
+                requested_url="https://healthy.example",
+                final_url="https://healthy.example",
+                reachable=True,
+                status_code=200,
+                uses_https=True,
+                technical_score=100,
+            ),
+            browser_audit=BrowserAudit(
+                requested_url="https://healthy.example",
+                final_url="https://healthy.example",
+                loaded=True,
+                status_code=200,
+                ux_score=35,
+                mobile_overflow=True,
+                visible_contact_cta_count=0,
+            ),
+        )
+        score_lead(lead)
+        self.assertEqual(lead.opportunity.type, OpportunityType.REDESIGN)
+        self.assertEqual(lead.opportunity.service_fit, "website_redesign")
+        self.assertTrue(lead.opportunity.actionable)
 
     def test_mid_health_site_is_optimization_not_no_site(self):
         lead = Lead(

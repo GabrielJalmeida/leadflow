@@ -195,3 +195,44 @@ LeadFlow no longer assumes that a business without a website is always the best 
 The score is composed from **service need + contactability + business activity**, while confidence remains separate. A website-specific opportunity is marked `VERIFY` instead of `READY` until entity resolution reaches `matched` or `probable_match`.
 
 Important: the HTTP/HTML website audit does **not** judge aesthetics. Even a `100/100` technical audit can still be a redesign opportunity; it simply needs a later visual/UX assessment.
+
+## Browser / UX audit (Phase 6A)
+
+The Phase 4 HTTP audit checks static technical facts. Phase 6A optionally opens an already-known public website in a real Chromium browser to measure observable UX behaviour without spending Tavily/Gemini credits.
+
+Install the optional browser capability:
+
+```bash
+pip install -e ".[browser]"
+python -m playwright install chromium
+```
+
+Then run:
+
+```bash
+python -m leadflow_agent search --segment "marcenaria" --city "Praia Grande" --state SP --limit 10 --provider tavily --investigate --audit-websites --browser-audit --browser-audit-limit 3
+```
+
+The browser audit records:
+
+- mobile horizontal overflow;
+- visible contact/WhatsApp/phone CTAs above the fold;
+- basic navigation-link presence;
+- console and page/JavaScript errors;
+- desktop and mobile full-page screenshots;
+- a transparent `browser_ux_score` from 0–100.
+
+`browser_ux_score` is **not** an aesthetic score. It does not claim whether the design is beautiful, modern, on-brand or competitive. Screenshots are intentionally retained for a future optional visual-intelligence phase and for human review in the frontend.
+
+The browser layer reuses the same public-network safety principle as the HTTP auditor. Localhost/private/non-public network targets are blocked, including browser subrequests when possible.
+
+Useful controls:
+
+```text
+--browser-audit-limit 3
+--browser-timeout 12
+--browser-audit-ttl-days 7
+--refresh-browser-audits
+```
+
+Playwright is optional. The rest of LeadFlow remains usable without installing a browser runtime.

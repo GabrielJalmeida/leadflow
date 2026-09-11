@@ -1,11 +1,16 @@
 [project]
 name = "leadflow-agent"
-version = "0.1.4.dev0"
-description = "Open-source lead research agent with BYOK providers."
-requires-python = ">=3.11"
+version = "0.1.4"
+description = "AI-assisted lead discovery and opportunity intelligence engine"
 readme = "README.md"
-license = {text = "MIT"}
-authors = [{name = "Move Heaven"}]
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+
+[project.optional-dependencies]
+browser = [
+    "playwright>=1.55"
+]
 
 [project.scripts]
 leadflow = "leadflow_agent.cli:main"
@@ -13,3 +18,9 @@ leadflow = "leadflow_agent.cli:main"
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["leadflow_agent*"]
+exclude = ["tests*", "data*", "output*"]
+namespaces = false

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from .providers.tavily import TavilySearchProvider
 from .storage import LeadStore
 from .services.investigator import LeadInvestigator
 from .services.website_auditor import WebsiteAuditor
+from .services.browser_auditor import BrowserAuditor
 
 
 VERSION = "0.1.4-dev"
@@ -111,6 +113,34 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Refaz auditorias mesmo quando existe resultado recente em memória.",
     )
+    search.add_argument(
+        "--browser-audit",
+        action="store_true",
+        help="Usa Chromium/Playwright para medir mobile/CTA/erros e capturar screenshots.",
+    )
+    search.add_argument(
+        "--browser-audit-limit",
+        type=int,
+        default=3,
+        help="Máximo de sites auditados em navegador real (default: 3).",
+    )
+    search.add_argument(
+        "--browser-timeout",
+        type=float,
+        default=12.0,
+        help="Timeout por site no navegador, de 4 a 30 segundos (default: 12).",
+    )
+    search.add_argument(
+        "--browser-audit-ttl-days",
+        type=int,
+        default=7,
+        help="Validade da auditoria de navegador, de 1 a 30 dias (default: 7).",
+    )
+    search.add_argument(
+        "--refresh-browser-audits",
+        action="store_true",
+        help="Refaz auditorias de navegador mesmo quando existe resultado recente.",
+    )
     search.add_argument("--no-ai", action="store_true", help="Desliga Gemini; Tavily usa extração heurística conservadora.")
     search.add_argument(
         "--provider",
@@ -157,6 +187,7 @@ def _doctor(settings: Settings, *, offline: bool = False) -> int:
     print(f"Brave:        {'configurada' if settings.brave_api_key else 'não configurada'}")
     print(f"Outscraper:   {'configurada' if settings.outscraper_api_key else 'não configurada'}")
     print(f"Database:     {Path(settings.db_path).resolve()}")
+    print(f"Playwright:   {'instalado' if importlib.util.find_spec('playwright') else 'opcional/não instalado'}")
 
     failures = 0
     if not offline and settings.gemini_api_key:
@@ -240,6 +271,7 @@ def _build_agent(
             investigator=investigator,
             lead_memory=memory,
             website_auditor=WebsiteAuditor(),
+            browser_auditor=BrowserAuditor(),
         )
 
     if provider_name == "outscraper" or (provider_name == "auto" and settings.outscraper_api_key):
@@ -258,6 +290,7 @@ def _build_agent(
             investigator=investigator,
             lead_memory=memory,
             website_auditor=WebsiteAuditor(),
+            browser_auditor=BrowserAuditor(),
         )
 
     if provider_name == "brave" or (provider_name == "auto" and settings.brave_api_key):
@@ -273,6 +306,7 @@ def _build_agent(
             investigator=investigator,
             lead_memory=memory,
             website_auditor=WebsiteAuditor(),
+            browser_auditor=BrowserAuditor(),
         )
 
     raise RuntimeError("Nenhum provider de busca configurado. Rode `python -m leadflow_agent setup`.")
@@ -296,6 +330,15 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
         return 2
     if args.audit_ttl_days < 1 or args.audit_ttl_days > 30:
         print("--audit-ttl-days deve ficar entre 1 e 30.", file=sys.stderr)
+        return 2
+    if args.browser_audit_limit < 0:
+        print("--browser-audit-limit não pode ser negativo.", file=sys.stderr)
+        return 2
+    if args.browser_timeout < 4 or args.browser_timeout > 30:
+        print("--browser-timeout deve ficar entre 4 e 30 segundos.", file=sys.stderr)
+        return 2
+    if args.browser_audit_ttl_days < 1 or args.browser_audit_ttl_days > 30:
+        print("--browser-audit-ttl-days deve ficar entre 1 e 30.", file=sys.stderr)
         return 2
     if args.cache_ttl_days < 1 or args.cache_ttl_days > 90:
         print("--cache-ttl-days deve ficar entre 1 e 90.", file=sys.stderr)
@@ -358,6 +401,11 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
             f"Website audit: ATIVO — até {args.audit_limit} sites | "
             f"TTL {args.audit_ttl_days} dias | timeout {args.audit_timeout:g}s"
         )
+    if args.browser_audit:
+        print(
+            f"Browser/UX audit: ATIVO — até {args.browser_audit_limit} sites | "
+            f"TTL {args.browser_audit_ttl_days} dias | timeout {args.browser_timeout:g}s"
+        )
     print()
 
     report = agent.research(
@@ -373,6 +421,11 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
         audit_timeout=args.audit_timeout,
         audit_ttl_days=args.audit_ttl_days,
         refresh_audits=args.refresh_audits,
+        browser_audit=args.browser_audit,
+        browser_audit_limit=args.browser_audit_limit,
+        browser_timeout=args.browser_timeout,
+        browser_audit_ttl_days=args.browser_audit_ttl_days,
+        refresh_browser_audits=args.refresh_browser_audits,
     )
 
     print(f"Planner: {report.plan.generated_by}")
@@ -397,6 +450,10 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
         print(f"Sites auditados agora:      {report.website_audits_run}")
         print(f"Auditorias reutilizadas:    {report.website_audits_reused}")
         print(f"Falhas/bloqueios de audit:  {report.website_audit_errors}")
+    if args.browser_audit:
+        print(f"Browser audits agora:        {report.browser_audits_run}")
+        print(f"Browser audits reutilizados: {report.browser_audits_reused}")
+        print(f"Falhas de browser audit:     {report.browser_audit_errors}")
     if not args.no_cache:
         print(f"Cache hits (buscas poupadas): {report.search_cache_hits}")
         print(f"Cache misses (calls reais):   {report.search_cache_misses}")
@@ -457,6 +514,16 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
             )
             if audit.findings:
                 print(f"    Audit findings: {'; '.join(audit.findings[:2])}")
+        if args.browser_audit and lead.browser_audit is not None:
+            browser = lead.browser_audit
+            print(
+                f"    Browser UX: {browser.ux_score}/100 | mobile overflow "
+                f"{'sim' if browser.mobile_overflow else 'não'} | CTA visíveis {browser.visible_contact_cta_count}"
+            )
+            if browser.findings:
+                print(f"    Browser findings: {'; '.join(browser.findings[:2])}")
+            if browser.mobile_screenshot:
+                print(f"    Mobile screenshot: {browser.mobile_screenshot}")
         if lead.opportunity is not None:
             print(f"    Oferta sugerida: {lead.opportunity.service_fit}")
             if lead.opportunity.reasons:

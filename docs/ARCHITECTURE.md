@@ -120,3 +120,15 @@ The fetcher manually handles redirects so every redirect target can be checked b
 `WebsiteAuditor` produces technical facts. `opportunity.assess_opportunity()` converts verified facts into a commercial hypothesis without changing entity identity. The opportunity engine must never treat technical reachability as proof that a domain belongs to a lead.
 
 Final ordering prefers actionable (`matched`/`probable_match`) opportunities before unverified ones. This is intentional: false association is considered worse than missing information. Visual quality is outside the HTTP audit and remains `REVIEW_NEEDED` until a visual/UX audit exists.
+
+## Phase 6A — Browser / UX audit
+
+Website intelligence is intentionally split into independent layers:
+
+1. `WebsiteAuditor`: bounded HTTP/HTML technical facts.
+2. `BrowserAuditor`: deterministic real-browser behaviour and screenshots.
+3. Future `VisualIntelligenceProvider`: optional subjective/AI-assisted visual assessment.
+
+This prevents `100/100 technical` from being interpreted as `100/100 design`. Browser UX may influence the opportunity type only for objective problems such as severe mobile overflow, missing contact paths or runtime errors. Visual aesthetics remain unresolved until a dedicated visual-review phase.
+
+The browser dependency is optional and loaded lazily. Discovery, entity resolution, investigation, cache, memory and HTTP website auditing do not require Playwright.
