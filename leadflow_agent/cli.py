@@ -22,6 +22,8 @@ from .providers.tavily import TavilySearchProvider
 from .providers.guarded import GuardedAIProvider, GuardedLocalSearchProvider, GuardedWebSearchProvider
 from .providers.catalog import PROVIDER_CATALOG
 from .runtime import RunBudget, RunController
+from .security import UnsafeInput, normalize_user_text, redact_text
+from .errors import classify_error
 from .storage import LeadStore
 from .services.investigator import LeadInvestigator
 from .services.website_auditor import WebsiteAuditor
@@ -246,14 +248,14 @@ def _doctor(settings: Settings, *, offline: bool = False) -> int:
         ok, detail = provider.validate_key(live_generation=True)
         print(f"Gemini geração: {'OK' if ok else 'FALHOU'}")
         if not ok:
-            print(f"  {detail}")
+            print(f"  {redact_text(detail, secrets=settings.secret_values())}")
             failures += 1
 
     if not offline and settings.tavily_api_key:
         provider = TavilySearchProvider(settings.tavily_api_key)
         ok, detail = provider.validate_key()
         print(f"Tavily API:     {'OK' if ok else 'FALHOU'}")
-        print(f"  {detail}")
+        print(f"  {redact_text(detail, secrets=settings.secret_values())}")
         if not ok:
             failures += 1
 
@@ -262,7 +264,7 @@ def _doctor(settings: Settings, *, offline: bool = False) -> int:
         ok, detail = provider.validate_key()
         print(f"Brave API:      {'OK' if ok else 'FALHOU'}")
         if not ok:
-            print(f"  {detail}")
+            print(f"  {redact_text(detail, secrets=settings.secret_values())}")
             failures += 1
 
     if not offline and settings.outscraper_api_key:
@@ -270,7 +272,7 @@ def _doctor(settings: Settings, *, offline: bool = False) -> int:
         ok, detail = provider.validate_key()
         print(f"Outscraper API: {'OK' if ok else 'FALHOU'}")
         if not ok:
-            print(f"  {detail}")
+            print(f"  {redact_text(detail, secrets=settings.secret_values())}")
             failures += 1
 
     if not settings.tavily_api_key and not settings.brave_api_key and not settings.outscraper_api_key:
@@ -433,7 +435,19 @@ def _build_filter_spec(args: argparse.Namespace) -> LeadFilterSpec:
     return spec
 
 
+def _normalize_search_args(args: argparse.Namespace) -> None:
+    args.segment = normalize_user_text(args.segment, field="segmento", max_length=120)
+    args.city = normalize_user_text(args.city, field="cidade", max_length=120)
+    args.state = normalize_user_text(args.state, field="estado", max_length=40, allow_empty=True)
+    args.country = normalize_user_text(args.country, field="país", max_length=80)
+
+
 def _search(args: argparse.Namespace, settings: Settings) -> int:
+    try:
+        _normalize_search_args(args)
+    except UnsafeInput as exc:
+        print(redact_text(exc, secrets=settings.secret_values()), file=sys.stderr)
+        return 2
     if args.limit < 1 or args.limit > 100:
         print("--limit deve ficar entre 1 e 100 no modo normal. Volumes maiores serão tratados por Bulk Research.", file=sys.stderr)
         return 2
@@ -525,7 +539,8 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
             run_controller=run_controller,
         )
     except Exception as exc:
-        print(str(exc), file=sys.stderr)
+        public = classify_error(exc, secrets=settings.secret_values())
+        print(f"{public.code.value}: {public.message}", file=sys.stderr)
         return 2
 
     preset = resolve_segment(args.segment)
@@ -668,7 +683,7 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
     if report.errors:
         print(f"Erros recuperáveis:        {len(report.errors)}")
         for error in report.errors[:6]:
-            print(f"  ! {error}")
+            print(f"  ! {redact_text(error, secrets=settings.secret_values())}")
     print()
 
     if not report.leads:

@@ -118,3 +118,14 @@
 - Added provider capability metadata and a `providers` CLI command, keeping free/paid account choices separate from core business logic.
 - Hardened Python packaging: explicit `leadflow_agent*` package discovery prevents runtime `data/`/`output/` folders from being mistaken for packages.
 - Updated project license metadata to the current SPDX-string form.
+
+## v0.1.4-dev — Phase 7.2: Core Hardening & Security Boundaries
+
+- Added versioned frontend research contract (`contracts.py`).
+- Added credential/token redaction and conservative user-input normalization.
+- Centralized safe generated-artifact paths for exports and browser screenshots.
+- Added stable public error taxonomy for provider/auth/rate-limit/runtime failures.
+- Hardened Gemini web/screenshot prompts against instructions embedded in untrusted content.
+- Added SQLite schema versioning and persisted run status/stop reason/usage counters.
+- Added `docs/SECURITY.md` and `docs/FRONTEND_CONTRACT.md`.
+- Added regression tests for security boundaries, frontend contract and legacy database migration.

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -9,6 +8,7 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from ..models import BrowserAudit, Evidence, Lead, utc_now_iso
+from ..security import safe_child_path, safe_slug
 from .website_auditor import UnsafeWebsiteUrl, validate_public_http_url
 
 
@@ -285,10 +285,10 @@ def _protect_context(context) -> None:  # noqa: ANN001
 
 
 def _artifact_dir(root: Path, lead: Lead) -> Path:
-    slug = re.sub(r"[^a-z0-9]+", "-", lead.name.casefold()).strip("-")[:48] or "lead"
+    slug = safe_slug(lead.name, fallback="lead", max_length=48)
     anchor = (lead.website or lead.provider_url or lead.name).encode("utf-8", errors="ignore")
     digest = hashlib.sha256(anchor).hexdigest()[:10]
-    return root / f"{slug}-{digest}"
+    return safe_child_path(root, f"{slug}-{digest}")
 
 
 def _evidence_detail(audit: BrowserAudit) -> str:

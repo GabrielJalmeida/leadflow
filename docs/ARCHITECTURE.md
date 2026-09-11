@@ -144,3 +144,13 @@ The layer outputs `VisualAudit`, which is subjective and confidence-gated. `Oppo
 - Visual Quality: subjective multimodal review.
 - Identity Confidence: whether the evidence belongs to the intended business.
 - Opportunity Fit: commercial interpretation of the above for the selected sales goal.
+
+## Phase 7.2 — hardening boundaries
+
+The backend/UI boundary is now explicit through `contracts.py`. The first frontend should consume the versioned research contract rather than depend on the entire persistence dataclass shape.
+
+Security helpers are centralized in `security.py`: conservative CLI text normalization, credential redaction and output-path containment. These are defense-in-depth controls; provider/web evidence remains untrusted even after sanitization.
+
+SQLite uses `PRAGMA user_version` plus idempotent column migrations. Research-run history now persists execution status, stop reason and provider-usage counters so later UI history can distinguish complete, partial and cancelled work without reconstructing that state from logs.
+
+Provider failures are classified into stable public error categories (`errors.py`) such as authentication, rate limit, temporary provider unavailability, budget exhaustion and cancellation. Internal exception details are not intended to become a public API contract.

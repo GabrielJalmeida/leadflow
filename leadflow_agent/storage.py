@@ -8,6 +8,8 @@ from .dedupe import lead_key
 from .models import ResearchReport
 
 
+DB_SCHEMA_VERSION = 2
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS research_runs (
@@ -21,7 +23,10 @@ CREATE TABLE IF NOT EXISTS research_runs (
     requested_limit INTEGER NOT NULL,
     result_count INTEGER NOT NULL,
     planner TEXT NOT NULL,
-    queries_json TEXT NOT NULL
+    queries_json TEXT NOT NULL,
+    run_status TEXT NOT NULL DEFAULT 'completed',
+    stop_reason TEXT,
+    usage_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS leads (
     lead_key TEXT PRIMARY KEY,
@@ -72,6 +77,17 @@ class LeadStore:
 
     def _migrate_existing_database(self) -> None:
         """Small idempotent migration layer for v0.x SQLite databases."""
+        run_columns = {
+            str(row[1])
+            for row in self.conn.execute("PRAGMA table_info(research_runs)").fetchall()
+        }
+        if "run_status" not in run_columns:
+            self.conn.execute("ALTER TABLE research_runs ADD COLUMN run_status TEXT NOT NULL DEFAULT 'completed'")
+        if "stop_reason" not in run_columns:
+            self.conn.execute("ALTER TABLE research_runs ADD COLUMN stop_reason TEXT")
+        if "usage_json" not in run_columns:
+            self.conn.execute("ALTER TABLE research_runs ADD COLUMN usage_json TEXT NOT NULL DEFAULT '{}'")
+
         columns = {
             str(row[1])
             for row in self.conn.execute("PRAGMA table_info(leads)").fetchall()
@@ -110,6 +126,7 @@ class LeadStore:
             self.conn.execute("ALTER TABLE leads ADD COLUMN visual_score INTEGER")
         if "visual_last_audited_at" not in columns:
             self.conn.execute("ALTER TABLE leads ADD COLUMN visual_last_audited_at TEXT")
+        self.conn.execute(f"PRAGMA user_version={DB_SCHEMA_VERSION}")
         self.conn.commit()
 
     def close(self) -> None:
@@ -120,14 +137,23 @@ class LeadStore:
             """
             INSERT INTO research_runs (
                 started_at, finished_at, segment, city, state, country,
-                requested_limit, result_count, planner, queries_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                requested_limit, result_count, planner, queries_json,
+                run_status, stop_reason, usage_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 report.started_at, report.finished_at, report.goal.segment,
                 report.goal.city, report.goal.state, report.goal.country,
                 report.goal.limit, len(report.leads), report.plan.generated_by,
                 json.dumps(report.queries_executed, ensure_ascii=False),
+                report.run_status, report.run_stop_reason,
+                json.dumps({
+                    "search_calls": report.usage_search_calls,
+                    "llm_calls": report.usage_llm_calls,
+                    "website_audits": report.usage_website_audits,
+                    "browser_audits": report.usage_browser_audits,
+                    "visual_audits": report.usage_visual_audits,
+                }, ensure_ascii=False),
             ),
         )
         run_id = int(cur.lastrowid)

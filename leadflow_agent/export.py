@@ -2,28 +2,24 @@ from __future__ import annotations
 
 import csv
 import json
-import re
 from datetime import datetime
 from pathlib import Path
 
 from .models import ResearchReport
-
-
-def _slug(value: str) -> str:
-    value = value.casefold()
-    value = re.sub(r"[^a-z0-9]+", "-", value)
-    return value.strip("-") or "research"
+from .security import redact_text, safe_child_path, safe_slug
 
 
 def export_report(report: ResearchReport, output_dir: str = "output") -> tuple[Path, Path]:
     folder = Path(output_dir)
     folder.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    base = f"{_slug(report.goal.segment)}-{_slug(report.goal.city)}-{_slug(report.goal.state)}-{stamp}"
-    json_path = folder / f"{base}.json"
-    csv_path = folder / f"{base}.csv"
+    base = f"{safe_slug(report.goal.segment, fallback='research')}-{safe_slug(report.goal.city, fallback='city')}-{safe_slug(report.goal.state, fallback='state')}-{stamp}"
+    json_path = safe_child_path(folder, f"{base}.json")
+    csv_path = safe_child_path(folder, f"{base}.csv")
 
-    json_path.write_text(json.dumps(report.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+    payload = report.to_dict()
+    payload["errors"] = [redact_text(item) for item in payload.get("errors", [])]
+    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(
             handle,
