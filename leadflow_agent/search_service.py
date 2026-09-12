@@ -51,7 +51,7 @@ class SearchFeatures:
 
 @dataclass(slots=True)
 class SearchBudgets:
-    max_search_calls: int = 20
+    max_search_calls: int = 30
     max_llm_calls: int = 30
     max_website_audits: int = 25
     max_browser_audits: int = 10
@@ -65,7 +65,7 @@ class SearchRequest:
     state: str = ""
     country: str = "Brazil"
     limit: int = 10
-    max_queries: int = 10
+    max_queries: int = 20
     profile: str = "website-sales"
     provider: str = "auto"
     no_ai: bool = False
@@ -217,9 +217,58 @@ def execute_search(
     settings = settings or Settings.load()
     request = validate_search_request(request, settings)
 
+    effective_max_queries = int(request.max_queries)
+    effective_pool_multiplier = int(request.filter_pool_multiplier)
+    effective_search_budget = int(request.budgets.max_search_calls)
+
+    if request.fulfill_quota:
+        # A requested quantity is a fulfillment target, not merely a hint.
+        # Give discovery enough semantic angles to keep searching before a
+        # partial result is accepted, while preserving a hard per-run ceiling.
+        effective_max_queries = max(
+            effective_max_queries,
+            min(20, max(12, int(request.limit) * 2)),
+        )
+        effective_pool_multiplier = max(effective_pool_multiplier, 5)
+
+        local_source_available = (
+            request.provider in {"brave", "outscraper"}
+            or (
+                request.provider == "auto"
+                and bool(settings.brave_api_key or settings.outscraper_api_key)
+            )
+        )
+        web_source_available = (
+            request.provider in {"tavily", "brave"}
+            or (
+                request.provider == "outscraper"
+                and bool(settings.tavily_api_key or settings.brave_api_key)
+            )
+            or (
+                request.provider == "auto"
+                and bool(settings.tavily_api_key or settings.brave_api_key)
+            )
+        )
+        discovery_source_count = max(
+            1,
+            int(local_source_available) + int(web_source_available),
+        )
+        investigation_reserve = (
+            request.features.investigation_limit * request.features.investigation_budget
+            if request.features.investigate
+            else 0
+        )
+        required_search_budget = (
+            effective_max_queries * discovery_source_count + investigation_reserve
+        )
+        effective_search_budget = max(
+            effective_search_budget,
+            min(50, required_search_budget),
+        )
+
     controller = RunController(
         RunBudget(
-            max_search_calls=request.budgets.max_search_calls,
+            max_search_calls=effective_search_budget,
             max_llm_calls=request.budgets.max_llm_calls,
             max_website_audits=request.budgets.max_website_audits,
             max_browser_audits=request.budgets.max_browser_audits,
@@ -256,18 +305,6 @@ def execute_search(
     # when a deeper website layer is requested so the scores remain independent.
     audit_websites = features.audit_websites or features.browser_audit or features.visual_audit
     browser_audit = features.browser_audit or features.visual_audit
-
-    effective_max_queries = int(request.max_queries)
-    effective_pool_multiplier = int(request.filter_pool_multiplier)
-    if request.fulfill_quota:
-        # Busca normal é orientada à quantidade solicitada. Clientes antigos
-        # ainda podem enviar 6 queries / pool 2x; o backend garante um piso
-        # seguro sem ultrapassar os hard budgets já existentes.
-        effective_max_queries = max(
-            effective_max_queries,
-            min(20, max(10, int(request.limit))),
-        )
-        effective_pool_multiplier = max(effective_pool_multiplier, 5)
 
     report = agent.research(
         goal,

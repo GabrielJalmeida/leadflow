@@ -1,7 +1,7 @@
 const OPPORTUNITY_LABELS: Record<string, string> = {
   new_site: 'Novo site',
   rebuild: 'Reconstrução',
-  redesign: 'Redesign',
+  redesign: 'Redesenho',
   optimization: 'Otimização',
   review_needed: 'Revisar',
   low_opportunity: 'Baixa oportunidade',
@@ -11,7 +11,7 @@ const OPPORTUNITY_LABELS: Record<string, string> = {
 const SERVICE_FIT_LABELS: Record<string, string> = {
   new_website: 'Novo site',
   website_rebuild: 'Reconstrução do site',
-  website_redesign: 'Redesign do site',
+  website_redesign: 'Redesenho do site',
   website_optimization: 'Otimização do site',
   website_review: 'Revisão do site',
   visual_review: 'Revisão visual',
@@ -44,8 +44,8 @@ const PROFILE_LABELS: Record<string, string> = {
   balanced: 'Equilibrado',
   'website-sales': 'Venda de sites',
   'new-site': 'Novo site',
-  redesign: 'Redesign',
-  'visual-redesign': 'Redesign visual',
+  redesign: 'Redesenho',
+  'visual-redesign': 'Redesenho visual',
   'ready-only': 'Somente prontos',
   'instagram-first': 'Instagram primeiro',
   'phone-first': 'Celular primeiro',
@@ -83,6 +83,10 @@ export function providerLabel(value?: string | null) {
     brave: 'Brave',
     outscraper: 'Outscraper',
     gemini: 'Gemini',
+  }
+  const parts = value.toLowerCase().split('+').filter(Boolean)
+  if (parts.length > 1) {
+    return parts.map((part) => labels[part] || part).join(' + ')
   }
   return labels[value.toLowerCase()] || value
 }

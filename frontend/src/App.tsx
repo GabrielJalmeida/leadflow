@@ -145,7 +145,7 @@ function App() {
                 <div className="message-bar message-bar--warning" role="status">
                   <ErrorCircleRegular />
                   <div>
-                    <strong>Quantidade parcial de leads.</strong>
+                    <strong>Quantidade parcial de oportunidades.</strong>
                     <span>
                       Encontramos {returned} de {requested}. O LeadFlow tentou ampliar a descoberta sem reduzir os critérios de qualidade
                       {usage?.search_calls ? ` e utilizou ${usage.search_calls} buscas.` : '.'}
@@ -158,7 +158,7 @@ function App() {
                 <div className="results-toolbar">
                   <div>
                     <p className="eyebrow">Fluxo de oportunidades</p>
-                    <h2>{result ? `${returned} leads encontrados` : 'Resultados'}</h2>
+                    <h2>{result ? `${returned} empresas encontradas` : 'Resultados'}</h2>
                   </div>
                   {result && (
                     <div className="results-summary">
@@ -179,11 +179,11 @@ function App() {
                 ) : !result ? (
                   <div className="empty-state empty-state--quiet">
                     <div className="empty-signal"><SearchRegular /></div>
-                    <h3>Seu próximo lead ainda não está aqui.</h3>
+                    <h3>Sua próxima oportunidade ainda não está aqui.</h3>
                     <p>Defina segmento e localização. Os resultados qualificados aparecem nesta área sem tirar você do contexto.</p>
                   </div>
                 ) : result.leads.length === 0 ? (
-                  <div className="empty-state"><SearchRegular /><h3>Nenhum lead elegível</h3><p>A pesquisa terminou sem resultados que passassem pelos critérios atuais. Ajuste os filtros ou amplie a busca.</p></div>
+                  <div className="empty-state"><SearchRegular /><h3>Nenhuma oportunidade elegível</h3><p>A pesquisa terminou sem resultados que passassem pelos critérios atuais. Ajuste os filtros ou amplie a busca.</p></div>
                 ) : (
                   <LeadTable leads={result.leads} selected={selectedLead} onSelect={setSelectedLead} />
                 )}
@@ -197,7 +197,7 @@ function App() {
             <div><StatusDot tone={apiOnline ? 'online' : 'offline'} label={apiOnline ? 'Núcleo conectado' : 'Núcleo desconectado'} /><span>Contrato {health.data?.frontend_contract_version ?? '—'}</span></div>
             <div>
               {usage && <span>Buscas {usage.search_calls ?? 0} · IA {usage.llm_calls ?? 0} · HTTP {usage.website_audits ?? 0} · Navegador {usage.browser_audits ?? 0} · Visual {usage.visual_audits ?? 0}</span>}
-              <span>LeadFlow alpha</span>
+              <span>LeadFlow alfa</span>
             </div>
           </footer>
         </main>

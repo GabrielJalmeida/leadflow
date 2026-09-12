@@ -21,7 +21,7 @@ const defaultValue: SearchFormValue = {
   state: 'SP',
   country: 'Brazil',
   limit: 10,
-  max_queries: 10,
+  max_queries: 20,
   profile: 'website-sales',
   provider: 'auto',
   no_ai: false,
@@ -55,7 +55,7 @@ const defaultValue: SearchFormValue = {
     visual_audit_limit: 3,
   },
   budgets: {
-    max_search_calls: 20,
+    max_search_calls: 30,
     max_llm_calls: 30,
     max_website_audits: 25,
     max_browser_audits: 10,
@@ -137,7 +137,7 @@ export function SearchPanel({ segments, profiles, providers, health, running, on
         </label>
 
         <label className="field field--count">
-          <span>Leads</span>
+          <span>Quantidade</span>
           <input
             type="number"
             min={1}
@@ -197,7 +197,7 @@ export function SearchPanel({ segments, profiles, providers, health, running, on
             checked={value.features.browser_audit}
             onChange={(event) => setValue({ ...value, features: { ...value.features, browser_audit: event.target.checked } })}
           />
-          <span>Navegador / UX</span>
+          <span>Navegador / experiência</span>
         </label>
         <label className="check-control">
           <input
@@ -235,7 +235,7 @@ export function SearchPanel({ segments, profiles, providers, health, running, on
           </button>
         ) : (
           <button className="button button--primary" type="submit">
-            <SearchRegular aria-hidden="true" /> Buscar leads
+            <SearchRegular aria-hidden="true" /> Buscar oportunidades
           </button>
         )}
       </div>

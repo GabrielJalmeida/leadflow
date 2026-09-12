@@ -70,7 +70,7 @@ class Phase84LeadQualityTests(unittest.TestCase):
 
     def test_defaults(self):
         request = SearchRequest(segment="marcenaria", city="Praia Grande")
-        self.assertEqual(request.max_queries, 10)
+        self.assertEqual(request.max_queries, 20)
         self.assertEqual(request.filter_pool_multiplier, 5)
         self.assertEqual(request.contact_strategy, "digital-first")
 

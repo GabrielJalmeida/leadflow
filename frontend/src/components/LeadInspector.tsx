@@ -83,7 +83,7 @@ export function LeadInspector({ lead, onClose }: Props) {
     <aside className="inspector" aria-label={`Detalhes de ${lead.name}`}>
       <div className="inspector__top">
         <div>
-          <p className="eyebrow">Lead selecionado</p>
+          <p className="eyebrow">Oportunidade selecionada</p>
           <h2>{lead.name}</h2>
           <div className="lead-meta-line">
             <span>{opportunityLabel(lead.opportunity?.type)}</span>

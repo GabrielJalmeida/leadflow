@@ -96,56 +96,78 @@ class LeadResearchAgent:
                 break
             if len(unique) >= target_pool:
                 break
+
             remaining = max(1, target_pool - len(unique))
             queries_executed.append(query)
+            found: list[Lead] = []
+            stop_after_query = False
 
+            # Local-business sources and general web sources are complementary.
+            # When both are configured, use both within the same discovery round
+            # and let entity resolution merge overlapping businesses afterward.
             if self.local_search is not None:
-                request_count = min(100, max(20, remaining * 3))
+                local_count = min(100, max(12, remaining * 2))
                 try:
-                    found = self.local_search.search_places(query, goal, count=request_count)
+                    local_found = self.local_search.search_places(
+                        query,
+                        goal,
+                        count=local_count,
+                    )
+                    source_results_seen += len(local_found)
+                    found.extend(local_found)
                 except (BudgetExceeded, RunCancelled) as exc:
-                    errors.append(f"{query}: {exc}")
-                    break
+                    errors.append(f"{query}: busca local interrompida: {exc}")
+                    stop_after_query = True
                 except Exception as exc:
-                    errors.append(f"{query}: {exc}")
-                    continue
-                source_results_seen += len(found)
-            else:
-                assert self.web_search is not None
-                request_count = min(20, max(10, remaining * 2))
+                    errors.append(f"{query}: busca local falhou: {exc}")
+
+            if self.web_search is not None and not stop_after_query:
+                web_count = min(20, max(10, remaining * 2))
                 web_query = _build_web_discovery_query(query, goal)
                 try:
-                    hits = self.web_search.search_web(web_query, country="BR", count=request_count)
+                    hits = self.web_search.search_web(
+                        web_query,
+                        country="BR",
+                        count=web_count,
+                    )
                 except (BudgetExceeded, RunCancelled) as exc:
-                    errors.append(f"{query}: search stopped: {exc}")
-                    break
+                    errors.append(f"{query}: busca web interrompida: {exc}")
+                    hits = []
+                    stop_after_query = True
                 except Exception as exc:
-                    errors.append(f"{query}: search failed: {exc}")
-                    continue
-                source_results_seen += len(hits)
+                    errors.append(f"{query}: busca web falhou: {exc}")
+                    hits = []
 
-                found: list[Lead] = []
-                if self.lead_extractor is not None:
+                source_results_seen += len(hits)
+                web_found: list[Lead] = []
+                if hits and self.lead_extractor is not None:
                     try:
-                        found = self.lead_extractor.extract_leads(
+                        web_found = self.lead_extractor.extract_leads(
                             hits,
                             goal,
                             query=query,
                             max_leads=max(remaining * 3, 10),
                         )
                     except Exception as exc:
-                        errors.append(f"{query}: AI extraction failed: {exc}")
+                        errors.append(f"{query}: extração por IA falhou: {exc}")
 
-                # If AI is absent or temporarily rate-limited, keep a useful
-                # deterministic fallback for direct business/social results.
-                if not found and hasattr(self.web_search, "heuristic_leads"):
+                # Keep a deterministic fallback for providers that expose one.
+                if hits and not web_found and hasattr(self.web_search, "heuristic_leads"):
                     try:
-                        found = self.web_search.heuristic_leads(hits, goal, query=query)  # type: ignore[attr-defined]
+                        web_found = self.web_search.heuristic_leads(
+                            hits,
+                            goal,
+                            query=query,
+                        )  # type: ignore[attr-defined]
                     except Exception as exc:
-                        errors.append(f"{query}: heuristic extraction failed: {exc}")
+                        errors.append(f"{query}: extração heurística falhou: {exc}")
+                found.extend(web_found)
 
             for lead in found:
-                invalid_fields_removed += sanitize_lead_fields(lead, digital_only=digital_contact_only)
+                invalid_fields_removed += sanitize_lead_fields(
+                    lead,
+                    digital_only=digital_contact_only,
+                )
                 quality = assess_lead_quality(lead, segment=goal.segment)
                 if not quality.accepted:
                     quality_rejected += 1
@@ -159,6 +181,9 @@ class LeadResearchAgent:
                     merge_leads(unique[duplicate_key], lead)
                 else:
                     unique[key] = lead
+
+            if stop_after_query:
+                break
 
         leads = list(unique.values())
 
@@ -450,7 +475,19 @@ def _cache_snapshot(provider):
 
 
 def _build_web_discovery_query(query: str, goal: SearchGoal) -> str:
+    """Turn planner phrases into complementary retrieval strategies."""
     location = " ".join(part for part in (goal.city, goal.state) if part).strip()
-    # Contact/social terms bias general web search toward evidence that is useful
-    # for prospecting without requiring a dedicated business-listings database.
+    folded = query.casefold()
+
+    if "instagram" in folded:
+        return f'"{query}" "{location}" perfil Instagram contato'.strip()
+    if "whatsapp" in folded or "celular" in folded or "contato" in folded:
+        return f'"{query}" "{location}" WhatsApp celular contato'.strip()
+    if "site" in folded or "presença digital" in folded or "presenca digital" in folded:
+        return f'"{query}" "{location}" site oficial portfólio contato'.strip()
+    if "avalia" in folded or "região" in folded or "regiao" in folded or "perto" in folded:
+        return f'"{query}" "{location}" avaliações endereço telefone'.strip()
+    if "catálogo" in folded or "catalogo" in folded or "projet" in folded:
+        return f'"{query}" "{location}" catálogo projetos Instagram'.strip()
+
     return f'"{query}" "{location}" telefone OR WhatsApp OR Instagram'.strip()

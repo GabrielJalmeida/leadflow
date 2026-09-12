@@ -75,7 +75,7 @@ class SearchFeaturesModel(BaseModel):
 class SearchBudgetsModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    max_search_calls: int = Field(default=20, ge=1, le=50)
+    max_search_calls: int = Field(default=30, ge=1, le=50)
     max_llm_calls: int = Field(default=30, ge=1, le=100)
     max_website_audits: int = Field(default=25, ge=0, le=50)
     max_browser_audits: int = Field(default=10, ge=0, le=25)
@@ -97,7 +97,7 @@ class SearchRunCreateModel(BaseModel):
     state: str = Field(default="", max_length=40)
     country: str = Field(default="Brazil", min_length=1, max_length=80)
     limit: int = Field(default=10, ge=1, le=100)
-    max_queries: int = Field(default=10, ge=1, le=20)
+    max_queries: int = Field(default=20, ge=1, le=20)
     profile: str = "website-sales"
     provider: Literal["auto", "tavily", "brave", "outscraper"] = "auto"
     no_ai: bool = False

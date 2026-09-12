@@ -13,7 +13,7 @@ export function NavRail() {
       <div className="brand-mark" aria-label="LeadFlow"><span>LF</span></div>
       <div className="nav-rail__group">
         <button className="nav-item is-active" aria-current="page" title="Descobrir"><CompassNorthwestRegular /><span>Descobrir</span></button>
-        <button className="nav-item" disabled title="Leads — próxima etapa"><PeopleTeamRegular /><span>Leads</span></button>
+        <button className="nav-item" disabled title="Oportunidades — próxima etapa"><PeopleTeamRegular /><span>Oportunidades</span></button>
         <button className="nav-item" disabled title="Funil — próxima etapa"><DataTrendingRegular /><span>Funil</span></button>
         <button className="nav-item" disabled title="Histórico — próxima etapa"><HistoryRegular /><span>Histórico</span></button>
       </div>

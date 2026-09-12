@@ -49,4 +49,5 @@ dist/
 .idea/
 .DS_Store
 Thumbs.db
-desktop.ini
+desktop.ininode_modules/
+apply_leadflow_phase*.py

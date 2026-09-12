@@ -41,7 +41,12 @@ class BasicQueryPlanner:
 
 
 def _expand_plan_to_budget(plan: QueryPlan, goal: SearchGoal, *, max_queries: int) -> QueryPlan:
-    """Expande planos curtos com ângulos determinísticos relevantes."""
+    """Expand short plans with safe deterministic discovery angles.
+
+    Gemini may return only a few strong queries. For quota-oriented discovery we
+    preserve those first and add relevant deterministic variants until the
+    configured query budget is available.
+    """
     base = goal.segment.strip()
     folded = base.casefold()
     supplements = [
