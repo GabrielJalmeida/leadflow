@@ -104,6 +104,7 @@ class SearchRunCreateModel(BaseModel):
     require_phone: bool = False
     filter_pool_multiplier: int = Field(default=5, ge=1, le=8)
     contact_strategy: Literal["digital-first", "multichannel"] = "digital-first"
+    fulfill_quota: bool = True
     use_cache: bool = True
     refresh_cache: bool = False
     cache_ttl_days: int = Field(default=14, ge=1, le=90)
@@ -126,6 +127,7 @@ class SearchRunCreateModel(BaseModel):
             require_phone=self.require_phone,
             filter_pool_multiplier=self.filter_pool_multiplier,
             contact_strategy=self.contact_strategy,
+            fulfill_quota=self.fulfill_quota,
             use_cache=self.use_cache,
             refresh_cache=self.refresh_cache,
             cache_ttl_days=self.cache_ttl_days,
@@ -257,7 +259,7 @@ class SearchRunManager:
             record = self._runs.get(run_id)
             if record is None:
                 return None
-            if record.status in {"completed", "partial_budget", "cancelled", "failed"}:
+            if record.status in {"completed", "partial_budget", "partial_results", "cancelled", "failed"}:
                 return record.snapshot()
             record.cancel_event.set()
             if record.status == "queued":
@@ -272,7 +274,7 @@ class SearchRunManager:
             return
         finished = [
             item for item in self._runs.values()
-            if item.status in {"completed", "partial_budget", "cancelled", "failed"}
+            if item.status in {"completed", "partial_budget", "partial_results", "cancelled", "failed"}
         ]
         finished.sort(key=lambda item: item.finished_at or item.created_at)
         while len(self._runs) > self._max_history and finished:

@@ -72,6 +72,7 @@ class SearchRequest:
     require_phone: bool = False
     filter_pool_multiplier: int = 5
     contact_strategy: str = "digital-first"
+    fulfill_quota: bool = True
     use_cache: bool = True
     refresh_cache: bool = False
     cache_ttl_days: int = 14
@@ -256,9 +257,21 @@ def execute_search(
     audit_websites = features.audit_websites or features.browser_audit or features.visual_audit
     browser_audit = features.browser_audit or features.visual_audit
 
+    effective_max_queries = int(request.max_queries)
+    effective_pool_multiplier = int(request.filter_pool_multiplier)
+    if request.fulfill_quota:
+        # Busca normal é orientada à quantidade solicitada. Clientes antigos
+        # ainda podem enviar 6 queries / pool 2x; o backend garante um piso
+        # seguro sem ultrapassar os hard budgets já existentes.
+        effective_max_queries = max(
+            effective_max_queries,
+            min(20, max(10, int(request.limit))),
+        )
+        effective_pool_multiplier = max(effective_pool_multiplier, 5)
+
     report = agent.research(
         goal,
-        max_queries=request.max_queries,
+        max_queries=effective_max_queries,
         investigate=features.investigate,
         investigation_limit=features.investigation_limit,
         investigation_budget=features.investigation_budget,
@@ -274,7 +287,7 @@ def execute_search(
         visual_audit_limit=features.visual_audit_limit,
         visual_audit_ttl_days=14,
         lead_filter=spec,
-        filter_pool_multiplier=request.filter_pool_multiplier,
+        filter_pool_multiplier=effective_pool_multiplier,
         digital_contact_only=request.contact_strategy == "digital-first",
     )
 

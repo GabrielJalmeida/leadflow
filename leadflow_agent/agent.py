@@ -13,7 +13,7 @@ from .services.investigator import LeadInvestigator
 from .services.website_auditor import WebsiteAuditor
 from .services.browser_auditor import BrowserAuditor
 from .services.visual_auditor import VisualAuditor
-from .runtime import BudgetExceeded, BudgetKind, RunCancelled, RunController
+from .runtime import BudgetExceeded, BudgetKind, RunCancelled, RunController, RunStatus
 
 
 class LeadResearchAgent:
@@ -381,8 +381,9 @@ class LeadResearchAgent:
         leads = leads[: goal.limit]
 
         if len(leads) < goal.limit and controller.stop_reason is None:
+            controller.status = RunStatus.PARTIAL_RESULTS
             controller.stop_reason = (
-                f"quota parcial: {len(leads)}/{goal.limit} leads elegíveis após descoberta, "
+                f"quantidade parcial: {len(leads)}/{goal.limit} leads elegíveis após descoberta, "
                 "deduplicação e filtros"
             )
 

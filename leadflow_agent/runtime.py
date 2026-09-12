@@ -11,6 +11,7 @@ class RunStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     PARTIAL_BUDGET = "partial_budget"
+    PARTIAL_RESULTS = "partial_results"
     CANCELLED = "cancelled"
 
 
