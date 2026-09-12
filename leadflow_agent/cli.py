@@ -31,7 +31,7 @@ from .services.browser_auditor import BrowserAuditor
 from .services.visual_auditor import VisualAuditor
 
 
-VERSION = "0.1.4-dev"
+VERSION = "0.2.0-alpha.1"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -48,6 +48,7 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("segments", help="Lista segmentos pré-selecionados; busca livre continua disponível.")
     sub.add_parser("profiles", help="Lista perfis prontos de qualificação/filtro.")
     sub.add_parser("providers", help="Lista providers e capacidades do core.")
+    sub.add_parser("gui", help="Abre o frontend desktop funcional v0.")
 
     search = sub.add_parser("search", help="Pesquisa leads reais.")
     search.add_argument("--segment", required=True, help='Ex.: "marcenaria"')
@@ -783,6 +784,10 @@ def main(argv: list[str] | None = None) -> int:
         return _print_profiles()
     if args.command == "providers":
         return _print_providers()
+    if args.command == "gui":
+        from .gui import launch_gui
+
+        return launch_gui()
 
     settings = Settings.load()
     if args.command == "doctor":
