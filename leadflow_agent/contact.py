@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
 
+from .validation import is_digital_contact_phone
+
 
 @dataclass(slots=True)
 class ContactRoute:
@@ -34,13 +36,6 @@ def _normalize_whatsapp_number(phone: str | None, *, country: str = "Brazil") ->
     if raw.startswith("+") and 8 <= len(digits) <= 15:
         return digits
     return digits if 8 <= len(digits) <= 15 else None
-
-
-def _looks_like_brazil_mobile(number: str | None) -> bool:
-    if not number or not number.startswith("55") or len(number) != 13:
-        return False
-    local = number[2:]
-    return len(local) == 11 and local[2] == "9"
 
 
 def _instagram_profile_url(socials: list[str]) -> str | None:
@@ -101,7 +96,8 @@ def resolve_contact_route(lead: dict[str, Any]) -> ContactRoute:
         contact.get("phone"),
         country=str(location.get("country") or "Brazil"),
     )
-    if phone and _looks_like_brazil_mobile(phone):
+    raw_phone = contact.get("phone")
+    if phone and is_digital_contact_phone(raw_phone, country=str(location.get("country") or "Brazil")):
         return ContactRoute(
             channel="whatsapp",
             label="WhatsApp?",
@@ -121,13 +117,6 @@ def resolve_contact_route(lead: dict[str, Any]) -> ContactRoute:
             whatsapp_source="phone_candidate" if phone else None,
         )
 
-    if phone:
-        return ContactRoute(
-            channel="whatsapp_test",
-            label="Testar WhatsApp",
-            whatsapp_number=phone,
-            whatsapp_source="phone_candidate",
-        )
 
     return ContactRoute(channel="none", label="—")
 

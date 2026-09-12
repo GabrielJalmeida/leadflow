@@ -40,13 +40,41 @@ class BasicQueryPlanner:
         )
 
 
+def _expand_plan_to_budget(plan: QueryPlan, goal: SearchGoal, *, max_queries: int) -> QueryPlan:
+    base = goal.segment.strip()
+    folded = base.casefold()
+    supplements = [
+        base, f"{base} empresa", f"{base} profissional", f"{base} serviços",
+        f"{base} orçamento", f"{base} Instagram", f"{base} WhatsApp",
+        f"{base} contato", f"{base} negócios locais", f"{base} região",
+    ]
+    if "marcenar" in folded or "móveis planejados" in folded or "moveis planejados" in folded:
+        supplements = [
+            base, "móveis planejados", "marceneiro", "móveis sob medida",
+            "fabricação de móveis sob medida", "marcenaria artesanal",
+            "projetos de marcenaria", "móveis personalizados",
+            "fábrica de móveis planejados", "planejados sob medida",
+        ]
+    combined: list[str] = []
+    for query in [*plan.queries, *supplements]:
+        query = " ".join(query.split())
+        if query and query.casefold() not in {item.casefold() for item in combined}:
+            combined.append(query)
+        if len(combined) >= max(1, max_queries):
+            break
+    plan.queries = combined
+    return plan
+
+
 def build_plan(goal: SearchGoal, llm: LLMProvider | None, *, max_queries: int = 6) -> QueryPlan:
     if llm is None:
-        return BasicQueryPlanner().plan_queries(goal, max_queries=max_queries)
+        plan = BasicQueryPlanner().plan_queries(goal, max_queries=max_queries)
+        return _expand_plan_to_budget(plan, goal, max_queries=max_queries)
     try:
-        return llm.plan_queries(goal, max_queries=max_queries)
+        plan = llm.plan_queries(goal, max_queries=max_queries)
+        return _expand_plan_to_budget(plan, goal, max_queries=max_queries)
     except Exception as exc:
         fallback = BasicQueryPlanner().plan_queries(goal, max_queries=max_queries)
         fallback.rationale = f"LLM planner falhou ({exc}); usando fallback determinístico."
         fallback.generated_by = "basic:fallback"
-        return fallback
+        return _expand_plan_to_budget(fallback, goal, max_queries=max_queries)

@@ -37,6 +37,55 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(profiles.status_code, 200)
         self.assertTrue(any(item["slug"] == "website-sales" for item in profiles.json()["items"]))
 
+    def test_contact_prepare_returns_frontend_ready_action(self):
+        def runner(_request, _cancel):
+            raise AssertionError("runner should not be called")
+
+        client, _ = self._client(runner)
+        response = client.post(
+            "/api/v1/contact/prepare",
+            json={
+                "lead": {
+                    "name": "Example Marcenaria",
+                    "location": {"country": "Brazil"},
+                    "contact": {
+                        "phone": "(13) 99999-1234",
+                        "socials": ["https://www.instagram.com/example/"],
+                    },
+                    "opportunity": {"type": "new_site"},
+                }
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["channel"], "whatsapp")
+        self.assertIn("Example Marcenaria", payload["message"])
+        self.assertTrue(payload["whatsapp_url"].startswith("https://wa.me/55"))
+
+    def test_contact_prepare_prefers_instagram_for_fixed_line(self):
+        def runner(_request, _cancel):
+            raise AssertionError("runner should not be called")
+
+        client, _ = self._client(runner)
+        response = client.post(
+            "/api/v1/contact/prepare",
+            json={
+                "lead": {
+                    "name": "Fixed Line Company",
+                    "location": {"country": "Brazil"},
+                    "contact": {
+                        "phone": "(13) 3491-6447",
+                        "socials": ["https://www.instagram.com/fixedline/"],
+                    },
+                    "opportunity": {"type": "new_site"},
+                }
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["channel"], "instagram")
+        self.assertEqual(payload["instagram_url"], "https://www.instagram.com/fixedline/")
+
     def test_background_run_returns_frontend_contract(self):
         def runner(request: SearchRequest, _cancel):
             return SearchExecution(

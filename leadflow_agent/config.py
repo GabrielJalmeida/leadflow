@@ -19,6 +19,24 @@ def _load_dotenv(path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
+def _resolve_dotenv_path(dotenv_path: str | Path) -> Path:
+    """Resolve LeadFlow's .env independently from the shell working directory.
+
+    During development the CLI may be started from ``frontend/`` while the
+    project-level ``.env`` lives beside ``pyproject.toml``. An explicit custom
+    path is always respected; only the default ``.env`` gets the project-root
+    fallback.
+    """
+    requested = Path(dotenv_path)
+    if requested != Path(".env") or requested.exists():
+        return requested
+
+    project_env = Path(__file__).resolve().parent.parent / ".env"
+    if project_env.exists():
+        return project_env
+    return requested
+
+
 @dataclass(slots=True)
 class Settings:
     gemini_api_key: str = ""
@@ -42,7 +60,7 @@ class Settings:
 
     @classmethod
     def load(cls, dotenv_path: str | Path = ".env") -> "Settings":
-        _load_dotenv(Path(dotenv_path))
+        _load_dotenv(_resolve_dotenv_path(dotenv_path))
         return cls(
             gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite").strip() or "gemini-3.1-flash-lite",

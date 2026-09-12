@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from .models import Lead, OpportunityType, WebsiteStatus
+from .validation import is_digital_contact_phone
 
 
 class Presence(str, Enum):
@@ -60,6 +61,23 @@ def _has_instagram(lead: Lead) -> bool:
     return any("instagram.com" in (url or "").lower() for url in lead.socials)
 
 
+def _has_explicit_whatsapp(lead: Lead) -> bool:
+    return any(
+        token in (url or "").lower()
+        for url in lead.socials
+        for token in ("wa.me/", "api.whatsapp.com", "whatsapp.com/send")
+    )
+
+
+def _has_useful_contact(lead: Lead) -> bool:
+    return bool(
+        lead.email
+        or _has_instagram(lead)
+        or _has_explicit_whatsapp(lead)
+        or is_digital_contact_phone(lead.phone, country=lead.country)
+    )
+
+
 def _presence_matches(value: bool, requirement: Presence) -> bool:
     if requirement == Presence.ANY:
         return True
@@ -73,7 +91,7 @@ def assess_filter(lead: Lead, spec: LeadFilterSpec) -> FilterDecision:
         reasons.append(f"website={lead.website_status.value}")
     if not _presence_matches(_has_instagram(lead), spec.instagram):
         reasons.append("instagram")
-    if not _presence_matches(bool(lead.phone), spec.phone):
+    if not _presence_matches(is_digital_contact_phone(lead.phone, country=lead.country), spec.phone):
         reasons.append("phone")
     if not _presence_matches(bool(lead.email), spec.email):
         reasons.append("email")
@@ -112,7 +130,7 @@ def assess_filter(lead: Lead, spec: LeadFilterSpec) -> FilterDecision:
         elif lead.visual_audit.overall_score > spec.max_visual_score:
             reasons.append("visual_score")
 
-    if spec.require_any_contact and not (lead.phone or lead.email or lead.socials):
+    if spec.require_any_contact and not _has_useful_contact(lead):
         reasons.append("no_contact_channel")
 
     return FilterDecision(accepted=not reasons, reasons=tuple(reasons))

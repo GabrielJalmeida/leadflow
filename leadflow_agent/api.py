@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import Settings
+from .contact import build_contact_message, build_whatsapp_url, resolve_contact_route
 from .contracts import FRONTEND_CONTRACT_VERSION
 from .errors import classify_error
 from .security import UnsafeInput
@@ -81,6 +82,13 @@ class SearchBudgetsModel(BaseModel):
     max_visual_audits: int = Field(default=10, ge=0, le=20)
 
 
+class ContactPrepareModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    lead: dict[str, Any]
+    message: str | None = Field(default=None, max_length=4000)
+
+
 class SearchRunCreateModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -89,12 +97,13 @@ class SearchRunCreateModel(BaseModel):
     state: str = Field(default="", max_length=40)
     country: str = Field(default="Brazil", min_length=1, max_length=80)
     limit: int = Field(default=10, ge=1, le=100)
-    max_queries: int = Field(default=6, ge=1, le=20)
+    max_queries: int = Field(default=10, ge=1, le=20)
     profile: str = "website-sales"
     provider: Literal["auto", "tavily", "brave", "outscraper"] = "auto"
     no_ai: bool = False
     require_phone: bool = False
-    filter_pool_multiplier: int = Field(default=2, ge=1, le=5)
+    filter_pool_multiplier: int = Field(default=5, ge=1, le=8)
+    contact_strategy: Literal["digital-first", "multichannel"] = "digital-first"
     use_cache: bool = True
     refresh_cache: bool = False
     cache_ttl_days: int = Field(default=14, ge=1, le=90)
@@ -116,6 +125,7 @@ class SearchRunCreateModel(BaseModel):
             no_ai=self.no_ai,
             require_phone=self.require_phone,
             filter_pool_multiplier=self.filter_pool_multiplier,
+            contact_strategy=self.contact_strategy,
             use_cache=self.use_cache,
             refresh_cache=self.refresh_cache,
             cache_ttl_days=self.cache_ttl_days,
@@ -366,6 +376,24 @@ def create_app(*, manager: SearchRunManager | None = None) -> FastAPI:
                 }
                 for item in PROVIDER_CATALOG.values()
             ]
+        }
+
+
+    @app.post("/api/v1/contact/prepare")
+    def prepare_contact(payload: ContactPrepareModel) -> dict[str, Any]:
+        route = resolve_contact_route(payload.lead)
+        message = (payload.message or build_contact_message(payload.lead)).strip()
+        whatsapp_url = None
+        if route.whatsapp_number:
+            whatsapp_url = build_whatsapp_url(route.whatsapp_number, message)
+        return {
+            "channel": route.channel,
+            "label": route.label,
+            "message": message,
+            "whatsapp_number": route.whatsapp_number,
+            "whatsapp_url": whatsapp_url,
+            "instagram_url": route.instagram_url,
+            "whatsapp_source": route.whatsapp_source,
         }
 
     @app.post("/api/v1/runs", status_code=status.HTTP_202_ACCEPTED)

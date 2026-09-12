@@ -67,7 +67,7 @@ PROFILES: dict[str, SearchProfile] = {
         instagram=Presence.PRESENT,
     ),
     "phone-first": SearchProfile(
-        "phone-first", "Phone First", "Leads com telefone disponível.",
+        "phone-first", "Phone First", "Leads com celular disponível para contato digital.",
         phone=Presence.PRESENT,
     ),
 }

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .dedupe import lead_key, merge_leads
+from .dedupe import find_duplicate_key, lead_key, merge_leads
 from .enrichment import enrich_lead_from_web
 from .filters import LeadFilterSpec, assess_filter
 from .models import Lead, ResearchReport, SearchGoal, utc_now_iso
@@ -71,6 +71,7 @@ class LeadResearchAgent:
         refresh_visual_audits: bool = False,
         lead_filter: LeadFilterSpec | None = None,
         filter_pool_multiplier: int = 2,
+        digital_contact_only: bool = False,
     ) -> ResearchReport:
         started = utc_now_iso()
         cache_before = _cache_snapshot(self.web_search)
@@ -144,7 +145,7 @@ class LeadResearchAgent:
                         errors.append(f"{query}: heuristic extraction failed: {exc}")
 
             for lead in found:
-                invalid_fields_removed += sanitize_lead_fields(lead)
+                invalid_fields_removed += sanitize_lead_fields(lead, digital_only=digital_contact_only)
                 quality = assess_lead_quality(lead, segment=goal.segment)
                 if not quality.accepted:
                     quality_rejected += 1
@@ -152,9 +153,10 @@ class LeadResearchAgent:
                 if goal.require_phone and not lead.phone:
                     continue
                 key = lead_key(lead)
-                if key in unique:
+                duplicate_key = find_duplicate_key(unique, lead)
+                if duplicate_key is not None:
                     duplicates_removed += 1
-                    merge_leads(unique[key], lead)
+                    merge_leads(unique[duplicate_key], lead)
                 else:
                     unique[key] = lead
 
@@ -175,7 +177,7 @@ class LeadResearchAgent:
                     memory_fields_restored += memory.fields_restored
                     memory_rejections_restored += memory.rejected_restored
                     # Old cached/memorized data may predate newer validators.
-                    invalid_fields_removed += sanitize_lead_fields(lead)
+                    invalid_fields_removed += sanitize_lead_fields(lead, digital_only=digital_contact_only)
 
         if enrich_web and self.web_search is not None:
             candidates = leads if enrichment_limit is None else leads[: max(0, enrichment_limit)]
@@ -218,6 +220,9 @@ class LeadResearchAgent:
                             errors.append(f"{lead.name}: {error}")
                     except Exception as exc:
                         errors.append(f"{lead.name}: investigation failed: {exc}")
+                    invalid_fields_removed += sanitize_lead_fields(
+                        lead, digital_only=digital_contact_only
+                    )
 
         website_audits_run = 0
         website_audits_reused = 0
@@ -374,6 +379,12 @@ class LeadResearchAgent:
             reverse=True,
         )
         leads = leads[: goal.limit]
+
+        if len(leads) < goal.limit and controller.stop_reason is None:
+            controller.stop_reason = (
+                f"quota parcial: {len(leads)}/{goal.limit} leads elegíveis após descoberta, "
+                "deduplicação e filtros"
+            )
 
         cache_after = _cache_snapshot(self.web_search)
         cache_hits = cache_misses = cache_writes = 0

@@ -56,6 +56,8 @@ def research_contract(report: ResearchReport) -> dict[str, Any]:
             "finished_at": report.finished_at,
             "requested_results": report.goal.limit,
             "returned_results": len(report.leads),
+            "quota_fulfilled": len(report.leads) >= report.goal.limit,
+            "shortfall": max(0, report.goal.limit - len(report.leads)),
             "usage": {
                 "search_calls": report.usage_search_calls,
                 "llm_calls": report.usage_llm_calls,

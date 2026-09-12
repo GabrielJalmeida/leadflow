@@ -65,12 +65,13 @@ class SearchRequest:
     state: str = ""
     country: str = "Brazil"
     limit: int = 10
-    max_queries: int = 6
+    max_queries: int = 10
     profile: str = "website-sales"
     provider: str = "auto"
     no_ai: bool = False
     require_phone: bool = False
-    filter_pool_multiplier: int = 2
+    filter_pool_multiplier: int = 5
+    contact_strategy: str = "digital-first"
     use_cache: bool = True
     refresh_cache: bool = False
     cache_ttl_days: int = 14
@@ -104,8 +105,10 @@ def validate_search_request(request: SearchRequest, settings: Settings | None = 
         raise ValueError(f"Perfil desconhecido: {request.profile}")
     if request.provider not in {"auto", "tavily", "brave", "outscraper"}:
         raise ValueError(f"Provider desconhecido: {request.provider}")
-    if not 1 <= int(request.filter_pool_multiplier) <= 5:
-        raise ValueError("filter_pool_multiplier deve ficar entre 1 e 5")
+    if not 1 <= int(request.filter_pool_multiplier) <= 8:
+        raise ValueError("filter_pool_multiplier deve ficar entre 1 e 8")
+    if request.contact_strategy not in {"digital-first", "multichannel"}:
+        raise ValueError("contact_strategy deve ser digital-first ou multichannel")
     if not 1 <= int(request.cache_ttl_days) <= 90:
         raise ValueError("cache_ttl_days deve ficar entre 1 e 90")
     if request.refresh_cache and not request.use_cache:
@@ -272,6 +275,7 @@ def execute_search(
         visual_audit_ttl_days=14,
         lead_filter=spec,
         filter_pool_multiplier=request.filter_pool_multiplier,
+        digital_contact_only=request.contact_strategy == "digital-first",
     )
 
     csv_path: Path | None = None

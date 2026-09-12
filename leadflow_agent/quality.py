@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from .models import Lead
-from .validation import is_plausible_phone
+from .validation import is_digital_contact_phone, is_plausible_phone
 
 
 _GENERIC_NAMES = {
@@ -68,14 +68,12 @@ def assess_lead_quality(lead: Lead, *, segment: str = "") -> QualityDecision:
     return QualityDecision(accepted=not reasons, reasons=list(dict.fromkeys(reasons)))
 
 
-def sanitize_lead_fields(lead: Lead) -> int:
-    """Remove structurally invalid fields without rejecting an otherwise good lead.
-
-    Returns the number of fields removed.
-    """
-
+def sanitize_lead_fields(lead: Lead, *, digital_only: bool = False) -> int:
+    """Remove invalid fields and fixed lines from digital-first actionable contact."""
     removed = 0
-    if lead.phone and not is_plausible_phone(lead.phone, country=lead.country):
+    invalid = lead.phone and not is_plausible_phone(lead.phone, country=lead.country)
+    not_digital = lead.phone and digital_only and not is_digital_contact_phone(lead.phone, country=lead.country)
+    if invalid or not_digital:
         lead.phone = None
         lead.field_confidence.pop("phone", None)
         removed += 1

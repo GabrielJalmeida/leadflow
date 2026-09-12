@@ -9,6 +9,7 @@ from .models import (
     OpportunityType,
     WebsiteStatus,
 )
+from .validation import is_digital_contact_phone
 
 
 @dataclass(slots=True)
@@ -96,12 +97,18 @@ def assess_opportunity(lead: Lead) -> OpportunityAssessment:
 def _contactability(lead: Lead) -> tuple[int, list[str]]:
     score = 0
     reasons: list[str] = []
-    if lead.phone:
+    social_values = [value.casefold() for value in lead.socials]
+    has_instagram = any("instagram.com" in value for value in social_values)
+    has_explicit_whatsapp = any(
+        "wa.me/" in value or "api.whatsapp.com" in value or "whatsapp.com/send" in value
+        for value in social_values
+    )
+    if is_digital_contact_phone(lead.phone, country=lead.country) or has_explicit_whatsapp:
         score += 15
-        reasons.append("telefone disponível +15")
-    if lead.socials:
+        reasons.append("canal digital direto disponível +15")
+    if has_instagram:
         score += 6
-        reasons.append("canal social disponível +6")
+        reasons.append("Instagram disponível +6")
     if lead.email:
         score += 4
         reasons.append("e-mail disponível +4")
