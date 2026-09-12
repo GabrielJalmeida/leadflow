@@ -1,23 +1,18 @@
 from __future__ import annotations
 
-import importlib.util
 import queue
 import sys
 import threading
 import webbrowser
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Callable
 
-from .config import Settings
-from .contracts import research_contract
+from .contact import ContactRoute, build_contact_message, build_whatsapp_url, resolve_contact_route
+from .search_service import SearchFeatures, SearchRequest, execute_search
+
 from .errors import classify_error
-from .export import export_report
-from .models import SearchGoal
-from .profiles import PROFILES, get_profile
-from .runtime import RunBudget, RunController
-from .segments import grouped_segments, resolve_segment
-from .storage import LeadStore
+from .profiles import PROFILES
+from .segments import grouped_segments
 
 
 @dataclass(slots=True)
@@ -54,10 +49,11 @@ def validate_gui_config(config: GuiSearchConfig) -> GuiSearchConfig:
     return config
 
 
-def lead_row_values(lead: dict[str, Any]) -> tuple[str, str, str, str, str, str]:
+def lead_row_values(lead: dict[str, Any]) -> tuple[str, str, str, str, str, str, str]:
     opportunity = lead.get("opportunity") or {}
     contact = lead.get("contact") or {}
     website = lead.get("website") or {}
+    route = resolve_contact_route(lead)
     opportunity_type = opportunity.get("type") or "unknown"
     actionable = "READY" if opportunity.get("actionable") else "VERIFY"
     return (
@@ -66,6 +62,7 @@ def lead_row_values(lead: dict[str, Any]) -> tuple[str, str, str, str, str, str]
         str(opportunity_type).replace("_", " ").upper(),
         actionable,
         str(contact.get("phone") or "—"),
+        route.label,
         str(website.get("url") or "—"),
     )
 
@@ -90,6 +87,7 @@ def _format_lead_detail(lead: dict[str, Any]) -> str:
         f"Telefone: {contact.get('phone') or '—'}",
         f"Email: {contact.get('email') or '—'}",
         f"Social: {', '.join(contact.get('socials') or []) or '—'}",
+        f"Contato preferido: {resolve_contact_route(lead).label}",
         "",
         "LOCALIZAÇÃO",
         f"Cidade/UF: {location.get('city') or '—'} / {location.get('state') or '—'}",
@@ -127,97 +125,42 @@ def _run_gui_search(
     *,
     cancel_check: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
-    """Execute GUI v0 through the same core used by the CLI.
-
-    The UI consumes only research_contract(), so later visual rewrites do not
-    couple themselves to the full internal Lead dataclass.
-    """
-
-    # Imported lazily to keep `import leadflow_agent.gui` cheap and to avoid
-    # creating a second provider-construction path during the first GUI phase.
-    from .cli import _build_agent
+    """Execute the proof-of-concept GUI through the shared application layer."""
 
     config = validate_gui_config(config)
-    settings = Settings.load()
-    if config.investigate and not settings.gemini_api_key:
-        raise ValueError("Investigator requer Gemini configurado. Rode `leadflow setup`.")
-    if config.visual_audit and not settings.gemini_api_key:
-        raise ValueError("Visual IA requer Gemini configurado. Rode `leadflow setup`.")
-    if config.browser_audit and importlib.util.find_spec("playwright") is None:
-        raise ValueError('Browser/UX requer Playwright. Instale com `pip install -e ".[browser]"`.')
-
-    controller = RunController(
-        RunBudget(
-            max_search_calls=20,
-            max_llm_calls=30,
-            max_website_audits=25,
-            max_browser_audits=10,
-            max_visual_audits=10,
+    bounded = min(config.limit, 3)
+    execution = execute_search(
+        SearchRequest(
+            segment=config.segment,
+            city=config.city,
+            state=config.state,
+            country=config.country,
+            limit=config.limit,
+            profile=config.profile,
+            provider=config.provider,
+            features=SearchFeatures(
+                investigate=config.investigate,
+                investigation_limit=bounded,
+                investigation_budget=2,
+                audit_websites=config.audit_websites,
+                audit_limit=bounded,
+                browser_audit=config.browser_audit,
+                browser_audit_limit=bounded,
+                visual_audit=config.visual_audit,
+                visual_audit_limit=bounded,
+            ),
         ),
         cancel_check=cancel_check,
+        persist=True,
+        export_results=True,
     )
-    selected_provider, agent = _build_agent(
-        settings,
-        no_ai=False,
-        provider_name=config.provider,
-        use_cache=True,
-        refresh_cache=False,
-        cache_ttl_days=14,
-        use_memory=True,
-        run_controller=controller,
-    )
-
-    preset = resolve_segment(config.segment)
-    segment = preset.label if preset is not None else config.segment
-    goal = SearchGoal(
-        segment=segment,
-        city=config.city,
-        state=config.state,
-        country=config.country,
-        limit=config.limit,
-        prefer_no_website=True,
-    )
-    lead_filter = get_profile(config.profile).filters()
-
-    audit_websites = config.audit_websites or config.browser_audit or config.visual_audit
-    browser_audit = config.browser_audit or config.visual_audit
-    bounded = min(config.limit, 3)
-    report = agent.research(
-        goal,
-        max_queries=6,
-        investigate=config.investigate,
-        investigation_limit=bounded,
-        investigation_budget=2,
-        audit_websites=audit_websites,
-        audit_limit=bounded,
-        audit_timeout=8.0,
-        audit_ttl_days=7,
-        browser_audit=browser_audit,
-        browser_audit_limit=bounded,
-        browser_timeout=12.0,
-        browser_audit_ttl_days=7,
-        visual_audit=config.visual_audit,
-        visual_audit_limit=bounded,
-        visual_audit_ttl_days=14,
-        lead_filter=lead_filter,
-        filter_pool_multiplier=2,
-    )
-
-    csv_path, json_path = export_report(report)
-    store = LeadStore(settings.db_path)
-    try:
-        run_id = store.save_report(report)
-        total = store.count_leads()
-    finally:
-        store.close()
-
     return {
-        "contract": research_contract(report),
-        "provider": selected_provider,
-        "csv_path": str(csv_path.resolve()),
-        "json_path": str(json_path.resolve()),
-        "run_id": run_id,
-        "total_leads": total,
+        "contract": execution.contract,
+        "provider": execution.provider,
+        "csv_path": execution.csv_path,
+        "json_path": execution.json_path,
+        "run_id": execution.db_run_id,
+        "total_leads": execution.total_leads,
     }
 
 
@@ -332,10 +275,16 @@ def launch_gui() -> int:
             body.add(results_frame, weight=3)
             body.add(log_frame, weight=1)
 
-            columns = ("score", "name", "type", "status", "phone", "website")
+            columns = ("score", "name", "type", "status", "phone", "contact", "website")
             self.tree = ttk.Treeview(results_frame, columns=columns, show="headings", selectmode="browse")
-            headings = {"score": "Fit", "name": "Empresa", "type": "Oportunidade", "status": "Estado", "phone": "Telefone", "website": "Website"}
-            widths = {"score": 60, "name": 260, "type": 140, "status": 80, "phone": 150, "website": 340}
+            headings = {
+                "score": "Fit", "name": "Empresa", "type": "Oportunidade", "status": "Estado",
+                "phone": "Telefone", "contact": "Contato", "website": "Website",
+            }
+            widths = {
+                "score": 55, "name": 235, "type": 125, "status": 75,
+                "phone": 135, "contact": 115, "website": 285,
+            }
             for key in columns:
                 self.tree.heading(key, text=headings[key])
                 self.tree.column(key, width=widths[key], anchor="w")
@@ -355,7 +304,8 @@ def launch_gui() -> int:
 
             hint = ttk.Frame(outer)
             hint.pack(fill="x", pady=(5, 0))
-            ttk.Label(hint, text="Dê duplo clique em um lead para abrir os detalhes.").pack(side="left")
+            ttk.Label(hint, text="Selecione um lead para contato rápido; duplo clique abre os detalhes.").pack(side="left")
+            ttk.Button(hint, text="CONTATO", command=self.open_contact_dialog).pack(side="left", padx=(10, 0))
             ttk.Button(hint, text="Como configurar APIs", command=self._show_setup_help).pack(side="right")
 
         def _show_setup_help(self) -> None:
@@ -476,13 +426,105 @@ def launch_gui() -> int:
             self.status_var.set("Cancelamento solicitado...")
             self.cancel_button.configure(state="disabled")
 
-        def open_selected_lead(self, _event: Any = None) -> None:
+        def _selected_lead(self) -> dict[str, Any] | None:
             selection = self.tree.selection()
             if not selection:
-                return
+                return None
             try:
-                lead = self.leads[int(selection[0])]
+                return self.leads[int(selection[0])]
             except (IndexError, ValueError):
+                return None
+
+        def _copy_message(self, message: str) -> None:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(message)
+            self.root.update()
+
+        def open_contact_dialog(self, lead: dict[str, Any] | None = None) -> None:
+            lead = lead or self._selected_lead()
+            if not lead:
+                self.messagebox.showinfo("Contato", "Selecione um lead primeiro.")
+                return
+
+            route = resolve_contact_route(lead)
+            if route.channel == "none" and not route.instagram_url:
+                self.messagebox.showinfo(
+                    "Contato",
+                    "Este lead ainda não possui WhatsApp/telefone utilizável nem Instagram identificado.\n"
+                    "A próxima etapa será permitir investigação de contato sob demanda.",
+                )
+                return
+
+            window = tk.Toplevel(self.root)
+            window.title(f"Contato — {lead.get('name') or 'Lead'}")
+            window.geometry("720x430")
+            window.minsize(620, 360)
+            frame = ttk.Frame(window, padding=12)
+            frame.pack(fill="both", expand=True)
+
+            ttk.Label(frame, text=f"Canal recomendado: {route.label}", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+            if route.whatsapp_source == "mobile_candidate":
+                ttk.Label(
+                    frame,
+                    text="WhatsApp não verificado: o número parece celular, mas o LeadFlow não confirma conta ativa.",
+                ).pack(anchor="w", pady=(2, 0))
+            elif route.whatsapp_source == "phone_candidate":
+                ttk.Label(
+                    frame,
+                    text="Telefone encontrado; WhatsApp não confirmado. Instagram é priorizado quando disponível.",
+                ).pack(anchor="w", pady=(2, 0))
+
+            ttk.Label(frame, text="Mensagem (revise antes de abrir o canal):").pack(anchor="w", pady=(12, 4))
+            message_box = tk.Text(frame, height=10, wrap="word", font=("Segoe UI", 10))
+            message_box.pack(fill="both", expand=True)
+            message_box.insert("1.0", build_contact_message(lead))
+
+            buttons = ttk.Frame(frame)
+            buttons.pack(fill="x", pady=(10, 0))
+
+            def current_message() -> str:
+                return message_box.get("1.0", "end").strip()
+
+            def open_whatsapp() -> None:
+                if not route.whatsapp_number:
+                    return
+                message = current_message()
+                if not message:
+                    self.messagebox.showwarning("Contato", "A mensagem está vazia.")
+                    return
+                webbrowser.open(build_whatsapp_url(route.whatsapp_number, message))
+
+            def open_instagram() -> None:
+                if not route.instagram_url:
+                    return
+                message = current_message()
+                if message:
+                    self._copy_message(message)
+                webbrowser.open(route.instagram_url)
+                self.status_var.set("Instagram aberto; mensagem copiada para a área de transferência.")
+
+            def copy_only() -> None:
+                message = current_message()
+                if message:
+                    self._copy_message(message)
+                    self.status_var.set("Mensagem copiada para a área de transferência.")
+
+            if route.whatsapp_number:
+                if route.whatsapp_source == "explicit":
+                    label = "Abrir WhatsApp com mensagem"
+                elif route.whatsapp_source == "mobile_candidate":
+                    label = "Tentar WhatsApp com mensagem"
+                else:
+                    label = "Testar WhatsApp com mensagem"
+                ttk.Button(buttons, text=label, command=open_whatsapp).pack(side="left")
+            if route.instagram_url:
+                ttk.Button(buttons, text="Instagram + copiar mensagem", command=open_instagram).pack(side="left", padx=(6, 0))
+            ttk.Button(buttons, text="Copiar mensagem", command=copy_only).pack(side="left", padx=(6, 0))
+            ttk.Button(buttons, text="Fechar", command=window.destroy).pack(side="right")
+
+        def open_selected_lead(self, _event: Any = None) -> None:
+            lead = self._selected_lead()
+            if not lead:
                 return
 
             window = tk.Toplevel(self.root)
@@ -500,9 +542,19 @@ def launch_gui() -> int:
             website = (lead.get("website") or {}).get("url")
             if website:
                 ttk.Button(buttons, text="Abrir website", command=lambda: webbrowser.open(str(website))).pack(side="left")
-            socials = (lead.get("contact") or {}).get("socials") or []
-            if socials:
-                ttk.Button(buttons, text="Abrir social", command=lambda: webbrowser.open(str(socials[0]))).pack(side="left", padx=(6, 0))
+            route = resolve_contact_route(lead)
+            if route.instagram_url:
+                ttk.Button(
+                    buttons,
+                    text="Abrir Instagram",
+                    command=lambda: webbrowser.open(str(route.instagram_url)),
+                ).pack(side="left", padx=(6, 0))
+            if route.channel != "none":
+                ttk.Button(
+                    buttons,
+                    text="Contato",
+                    command=lambda: self.open_contact_dialog(lead),
+                ).pack(side="left", padx=(6, 0))
             ttk.Button(buttons, text="Fechar", command=window.destroy).pack(side="right")
 
         def _on_close(self) -> None:

@@ -6,29 +6,22 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from .agent import LeadResearchAgent
-from .cache import CachedWebSearchProvider, PersistentSearchCache
+from .agent_factory import build_agent
 from .config import Settings
 from .export import export_report
 from .models import OpportunityType, SearchGoal, WebsiteStatus
 from .filters import LeadFilterSpec, Presence, Readiness
 from .profiles import PROFILES, get_profile
 from .segments import grouped_segments, resolve_segment
-from .memory import LeadMemory
 from .providers.brave import BraveSearchProvider
 from .providers.gemini import GeminiPlannerProvider
 from .providers.outscraper import OutscraperSearchProvider
 from .providers.tavily import TavilySearchProvider
-from .providers.guarded import GuardedAIProvider, GuardedLocalSearchProvider, GuardedWebSearchProvider
 from .providers.catalog import PROVIDER_CATALOG
 from .runtime import RunBudget, RunController
 from .security import UnsafeInput, normalize_user_text, redact_text
 from .errors import classify_error
 from .storage import LeadStore
-from .services.investigator import LeadInvestigator
-from .services.website_auditor import WebsiteAuditor
-from .services.browser_auditor import BrowserAuditor
-from .services.visual_auditor import VisualAuditor
 
 
 VERSION = "0.2.0-alpha.1"
@@ -49,6 +42,8 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("profiles", help="Lista perfis prontos de qualificação/filtro.")
     sub.add_parser("providers", help="Lista providers e capacidades do core.")
     sub.add_parser("gui", help="Abre o frontend desktop funcional v0.")
+    api = sub.add_parser("api", help="Inicia a API local do LeadFlow em 127.0.0.1.")
+    api.add_argument("--port", type=int, default=8765, help="Porta local da API (default: 8765).")
 
     search = sub.add_parser("search", help="Pesquisa leads reais.")
     search.add_argument("--segment", required=True, help='Ex.: "marcenaria"')
@@ -299,83 +294,17 @@ def _build_agent(
     use_memory: bool = True,
     run_controller: RunController | None = None,
 ):
-    controller = run_controller or RunController()
-    llm = None
-    if not no_ai and settings.gemini_api_key:
-        llm = GuardedAIProvider(
-            GeminiPlannerProvider(settings.gemini_api_key, model=settings.gemini_model),
-            controller,
-        )
-
-    memory = LeadMemory(settings.db_path) if use_memory else None
-
-    def cached(provider):
-        if provider is None or not use_cache:
-            return provider
-        return CachedWebSearchProvider(
-            provider,
-            PersistentSearchCache(settings.db_path, ttl_days=cache_ttl_days),
-            force_refresh=refresh_cache,
-        )
-
-    if provider_name == "tavily" or (provider_name == "auto" and settings.tavily_api_key):
-        if not settings.tavily_api_key:
-            raise RuntimeError("TAVILY_API_KEY não configurada.")
-        web = cached(GuardedWebSearchProvider(TavilySearchProvider(settings.tavily_api_key), controller))
-        investigator = LeadInvestigator(web_search=web, extractor=llm) if llm is not None else None
-        return "tavily", LeadResearchAgent(
-            web_search=web,
-            llm=llm,
-            lead_extractor=llm,
-            investigator=investigator,
-            lead_memory=memory,
-            website_auditor=WebsiteAuditor(),
-            browser_auditor=BrowserAuditor(),
-            visual_auditor=VisualAuditor(llm) if llm is not None else None,
-            run_controller=controller,
-        )
-
-    if provider_name == "outscraper" or (provider_name == "auto" and settings.outscraper_api_key):
-        if not settings.outscraper_api_key:
-            raise RuntimeError("OUTSCRAPER_API_KEY não configurada.")
-        local = GuardedLocalSearchProvider(OutscraperSearchProvider(settings.outscraper_api_key), controller)
-        web_base = GuardedWebSearchProvider(TavilySearchProvider(settings.tavily_api_key), controller) if settings.tavily_api_key else (
-            GuardedWebSearchProvider(BraveSearchProvider(settings.brave_api_key), controller) if settings.brave_api_key else None
-        )
-        web = cached(web_base)
-        investigator = LeadInvestigator(web_search=web, extractor=llm) if (web is not None and llm is not None) else None
-        return "outscraper", LeadResearchAgent(
-            local_search=local,
-            web_search=web,
-            llm=llm,
-            investigator=investigator,
-            lead_memory=memory,
-            website_auditor=WebsiteAuditor(),
-            browser_auditor=BrowserAuditor(),
-            visual_auditor=VisualAuditor(llm) if llm is not None else None,
-            run_controller=controller,
-        )
-
-    if provider_name == "brave" or (provider_name == "auto" and settings.brave_api_key):
-        if not settings.brave_api_key:
-            raise RuntimeError("BRAVE_SEARCH_API_KEY não configurada.")
-        provider = BraveSearchProvider(settings.brave_api_key)
-        local = GuardedLocalSearchProvider(provider, controller)
-        web = cached(GuardedWebSearchProvider(provider, controller))
-        investigator = LeadInvestigator(web_search=web, extractor=llm) if llm is not None else None
-        return "brave", LeadResearchAgent(
-            local_search=local,
-            web_search=web,
-            llm=llm,
-            investigator=investigator,
-            lead_memory=memory,
-            website_auditor=WebsiteAuditor(),
-            browser_auditor=BrowserAuditor(),
-            visual_auditor=VisualAuditor(llm) if llm is not None else None,
-            run_controller=controller,
-        )
-
-    raise RuntimeError("Nenhum provider de busca configurado. Rode `python -m leadflow_agent setup`.")
+    """Backward-compatible CLI wrapper around the shared agent factory."""
+    return build_agent(
+        settings,
+        no_ai=no_ai,
+        provider_name=provider_name,
+        use_cache=use_cache,
+        refresh_cache=refresh_cache,
+        cache_ttl_days=cache_ttl_days,
+        use_memory=use_memory,
+        run_controller=run_controller,
+    )
 
 
 def _print_segments() -> int:
@@ -788,6 +717,20 @@ def main(argv: list[str] | None = None) -> int:
         from .gui import launch_gui
 
         return launch_gui()
+    if args.command == "api":
+        if args.port < 1024 or args.port > 65535:
+            print("--port deve ficar entre 1024 e 65535.", file=sys.stderr)
+            return 2
+        try:
+            import uvicorn
+            from .api import create_app
+        except ImportError:
+            print('A API local requer o extra `api`. Instale com: python -m pip install -e ".[api]"', file=sys.stderr)
+            return 2
+        print(f"LeadFlow Local API: http://127.0.0.1:{args.port}")
+        print(f"OpenAPI docs:       http://127.0.0.1:{args.port}/docs")
+        uvicorn.run(create_app(), host="127.0.0.1", port=args.port, log_level="info")
+        return 0
 
     settings = Settings.load()
     if args.command == "doctor":

@@ -1,4 +1,30 @@
 
+## Phase 8.2 — Local Application API
+
+- Added a frontend-agnostic FastAPI local application layer bound to `127.0.0.1` by the CLI.
+- Added asynchronous research runs with run IDs, status polling, result retrieval and real cancellation via the existing `RunController`.
+- Added API catalogs for segments, profiles and provider capabilities.
+- Added a shared `search_service` application layer so the proof-of-concept GUI and future frontend use the same research execution path.
+- Extracted provider construction from the CLI into a reusable agent factory.
+- Extracted contact routing/message preparation from Tkinter into a frontend-independent service module.
+- Added local Host/Origin safeguards for the browser-facing API boundary.
+- Added optional `api` dependencies instead of forcing FastAPI/Uvicorn onto CLI-only users.
+- Added deterministic API and application-layer tests.
+- No permanent frontend framework is selected in this phase; the UI stack will be chosen from the target visual/interaction references.
+
+## Phase 8.1 — Contact Workspace v0
+
+- Added one-click contact preparation to the functional GUI.
+- WhatsApp click-to-chat links include an editable pre-filled message; the user still reviews and sends manually.
+- Instagram is preferred over an unverified fixed-line phone when an Instagram profile is available.
+- Brazilian mobile numbers are treated as WhatsApp candidates, not as verified WhatsApp accounts.
+- Explicit `wa.me` / WhatsApp links have the highest contact-channel confidence.
+- Facebook is intentionally excluded from the quick-contact route for now.
+- Instagram contact opens the profile and copies the approved message to the clipboard.
+- Added opportunity-aware default outreach drafts for new-site and redesign/rebuild/optimization leads.
+- Added deterministic tests for channel resolution, phone normalization and WhatsApp message URLs.
+
+
 ## [Unreleased] — Phase 5 Opportunity Intelligence
 
 - Replaces the old "no website = best lead" heuristic with an explainable opportunity engine.
