@@ -1,0 +1,33 @@
+# LeadFlow Phase 8.4.4 — Real-World Quality Validation
+# This intentionally uses a tiny, dependency-free YAML subset parsed by
+# leadflow_agent.benchmark.load_benchmark_cases.
+
+- id: marcenaria-praia-grande-sp
+  segment: marcenaria
+  city: Praia Grande
+  state: SP
+  target: 10
+
+- id: estetica-automotiva-santos-sp
+  segment: estetica automotiva
+  city: Santos
+  state: SP
+  target: 10
+
+- id: vidracaria-sao-vicente-sp
+  segment: vidracaria
+  city: Sao Vicente
+  state: SP
+  target: 10
+
+- id: eletricista-campinas-sp
+  segment: eletricista
+  city: Campinas
+  state: SP
+  target: 10
+
+- id: moveis-planejados-sao-luis-ma
+  segment: moveis planejados
+  city: Sao Luis
+  state: MA
+  target: 10

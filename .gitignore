@@ -1,0 +1,72 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime data
+data/
+output/
+
+# LeadFlow development patches
+*.patch
+
+# SQLite / runtime databases
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+
+# Logs
+*.log
+logs/
+
+# Browser artifacts
+playwright-report/
+test-results/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+node_modules/
+apply_leadflow_phase*.py
+
+# Real-world benchmark artifacts (may contain public business contact data)
+benchmarks/results/*
+!benchmarks/results/.gitkeep
+
+# Fast validation smoke/replay artifacts
+benchmarks/smoke/*
+!benchmarks/smoke/.gitkeep
+
+# Ultra-fast discovery-only fixture captures
+benchmarks/captures/*
+!benchmarks/captures/.gitkeep
+
+# Local benchmark archive
+benchmarks.zip
+
+# TypeScript build metadata
+*.tsbuildinfo

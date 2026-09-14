@@ -1,0 +1,643 @@
+from __future__ import annotations
+
+from .dedupe import find_duplicate_key, lead_key, merge_leads
+from .enrichment import enrich_lead_from_web
+from .filters import LeadFilterSpec, assess_filter
+from .models import IdentityStatus, Lead, ResearchReport, SearchGoal, utc_now_iso
+from .memory import LeadMemory
+from .planner import build_plan
+from .quality import assess_lead_quality, sanitize_lead_fields
+from .providers.base import LeadExtractorProvider, LLMProvider, LocalSearchProvider, WebSearchProvider
+from .scoring import score_lead
+from .services.investigator import LeadInvestigator
+from .services.website_auditor import WebsiteAuditor
+from .services.browser_auditor import BrowserAuditor
+from .services.visual_auditor import VisualAuditor
+from .runtime import BudgetExceeded, BudgetKind, RunCancelled, RunController, RunStatus
+from .replay import (
+    build_replay_snapshot,
+    capture_selection,
+    capture_stage,
+    order_for_audit,
+    order_for_investigation,
+    preliminary_accepts,
+)
+
+
+class LeadResearchAgent:
+    def __init__(
+        self,
+        *,
+        local_search: LocalSearchProvider | None = None,
+        web_search: WebSearchProvider | None = None,
+        llm: LLMProvider | None = None,
+        lead_extractor: LeadExtractorProvider | None = None,
+        investigator: LeadInvestigator | None = None,
+        lead_memory: LeadMemory | None = None,
+        website_auditor: WebsiteAuditor | None = None,
+        browser_auditor: BrowserAuditor | None = None,
+        visual_auditor: VisualAuditor | None = None,
+        run_controller: RunController | None = None,
+    ):
+        if local_search is None and web_search is None:
+            raise ValueError("LeadResearchAgent requires a local or web search provider.")
+        self.local_search = local_search
+        self.web_search = web_search
+        self.llm = llm
+        self.lead_extractor = lead_extractor
+        self.investigator = investigator
+        self.lead_memory = lead_memory
+        self.website_auditor = website_auditor
+        self.browser_auditor = browser_auditor
+        self.visual_auditor = visual_auditor
+        self.run_controller = run_controller or RunController()
+
+    def research(
+        self,
+        goal: SearchGoal,
+        *,
+        max_queries: int = 6,
+        enrich_web: bool = False,
+        enrichment_limit: int | None = None,
+        investigate: bool = False,
+        investigation_limit: int | None = None,
+        investigation_budget: int = 2,
+        audit_websites: bool = False,
+        audit_limit: int | None = 3,
+        audit_timeout: float = 8.0,
+        audit_ttl_days: int = 7,
+        refresh_audits: bool = False,
+        browser_audit: bool = False,
+        browser_audit_limit: int | None = 3,
+        browser_timeout: float = 12.0,
+        browser_audit_ttl_days: int = 7,
+        refresh_browser_audits: bool = False,
+        browser_artifacts_dir: str = "output/browser-audits",
+        visual_audit: bool = False,
+        visual_audit_limit: int | None = 3,
+        visual_audit_ttl_days: int = 14,
+        refresh_visual_audits: bool = False,
+        lead_filter: LeadFilterSpec | None = None,
+        filter_pool_multiplier: int = 2,
+        digital_contact_only: bool = False,
+        fulfill_quota: bool = False,
+        capture_replay: bool = False,
+        excluded_lead_keys: set[str] | None = None,
+    ) -> ResearchReport:
+        started = utc_now_iso()
+        replay_snapshot = build_replay_snapshot(
+            goal,
+            lead_filter,
+            settings={
+                "investigation_limit": investigation_limit,
+                "investigation_budget": investigation_budget,
+                "audit_limit": audit_limit,
+                "digital_contact_only": digital_contact_only,
+                "fulfill_quota": fulfill_quota,
+            },
+        ) if capture_replay else None
+        cache_before = _cache_snapshot(self.web_search)
+        plan = build_plan(goal, self.llm, max_queries=max_queries)
+        unique: dict[str, Lead] = {}
+        target_pool = goal.limit
+        if lead_filter is not None and lead_filter.active:
+            target_pool = min(1000, max(goal.limit, goal.limit * max(1, int(filter_pool_multiplier))))
+
+        # Quota fulfillment must be based on candidates that are already likely
+        # to survive the user-facing filters, not merely on the raw number of
+        # unique businesses discovered. A small qualification buffer absorbs
+        # candidates that may still fall out after investigation/audits.
+        has_deep_postprocessing = any((
+            enrich_web,
+            investigate,
+            audit_websites,
+            browser_audit,
+            visual_audit,
+        ))
+        qualification_buffer = (
+            max(1, goal.limit // 5)
+            if fulfill_quota and has_deep_postprocessing
+            else 0
+        )
+        # Some user-facing filters (website state, readiness, opportunity/audit
+        # score) only become meaningful after investigation/auditing. Discovery
+        # therefore counts only cheap observable constraints, but deliberately
+        # overfetches when deferred filters exist so Phase 8.4.3 quota
+        # fulfillment is not traded for lower provider usage.
+        deferred_filtering = _has_deferred_preliminary_filters(lead_filter)
+        if fulfill_quota and deferred_filtering:
+            deferred_multiplier = min(3, max(2, int(filter_pool_multiplier)))
+            qualified_target = min(
+                1000,
+                max(goal.limit + qualification_buffer, goal.limit * deferred_multiplier),
+            )
+        else:
+            qualified_target = min(1000, goal.limit + qualification_buffer)
+        hard_candidate_cap = min(
+            1000,
+            max(target_pool, target_pool * 4 if fulfill_quota else target_pool),
+        )
+        preliminary_qualified = 0
+        queries_executed: list[str] = []
+        source_results_seen = 0
+        duplicates_removed = 0
+        quality_rejected = 0
+        invalid_fields_removed = 0
+        errors: list[str] = []
+        controller = self.run_controller
+        excluded_lead_keys = excluded_lead_keys or set()
+
+        for query in plan.queries:
+            try:
+                controller.check_cancelled()
+            except RunCancelled as exc:
+                errors.append(str(exc))
+                break
+            if fulfill_quota:
+                if preliminary_qualified >= qualified_target:
+                    break
+                if len(unique) >= hard_candidate_cap:
+                    break
+                remaining = max(1, qualified_target - preliminary_qualified)
+            else:
+                if len(unique) >= target_pool:
+                    break
+                remaining = max(1, target_pool - len(unique))
+            queries_executed.append(query)
+            found: list[Lead] = []
+            stop_after_query = False
+
+            # Local-business sources and general web sources are complementary.
+            # When both are configured, use both within the same discovery round
+            # and let entity resolution merge overlapping businesses afterward.
+            if self.local_search is not None:
+                local_count = min(100, max(12, remaining * 2))
+                try:
+                    local_found = self.local_search.search_places(
+                        query,
+                        goal,
+                        count=local_count,
+                    )
+                    source_results_seen += len(local_found)
+                    found.extend(local_found)
+                except (BudgetExceeded, RunCancelled) as exc:
+                    errors.append(f"{query}: busca local interrompida: {exc}")
+                    stop_after_query = True
+                except Exception as exc:
+                    errors.append(f"{query}: busca local falhou: {exc}")
+
+            if self.web_search is not None and not stop_after_query:
+                web_count = min(20, max(10, remaining * 2))
+                web_query = _build_web_discovery_query(query, goal)
+                try:
+                    hits = self.web_search.search_web(
+                        web_query,
+                        country="BR",
+                        count=web_count,
+                    )
+                except (BudgetExceeded, RunCancelled) as exc:
+                    errors.append(f"{query}: busca web interrompida: {exc}")
+                    hits = []
+                    stop_after_query = True
+                except Exception as exc:
+                    errors.append(f"{query}: busca web falhou: {exc}")
+                    hits = []
+
+                source_results_seen += len(hits)
+                web_found: list[Lead] = []
+                if hits and self.lead_extractor is not None:
+                    try:
+                        web_found = self.lead_extractor.extract_leads(
+                            hits,
+                            goal,
+                            query=query,
+                            max_leads=max(remaining * 3, 10),
+                        )
+                    except Exception as exc:
+                        errors.append(f"{query}: extração por IA falhou: {exc}")
+
+                # Keep a deterministic fallback for providers that expose one.
+                if hits and not web_found and hasattr(self.web_search, "heuristic_leads"):
+                    try:
+                        web_found = self.web_search.heuristic_leads(
+                            hits,
+                            goal,
+                            query=query,
+                        )  # type: ignore[attr-defined]
+                    except Exception as exc:
+                        errors.append(f"{query}: extração heurística falhou: {exc}")
+                found.extend(web_found)
+
+            for lead in found:
+                invalid_fields_removed += sanitize_lead_fields(
+                    lead,
+                    digital_only=digital_contact_only,
+                )
+                quality = assess_lead_quality(lead, segment=goal.segment)
+                if not quality.accepted:
+                    quality_rejected += 1
+                    continue
+                if goal.require_phone and not lead.phone:
+                    continue
+                key = lead_key(lead)
+                if key in excluded_lead_keys:
+                    continue
+                duplicate_key = find_duplicate_key(unique, lead)
+                if duplicate_key is not None:
+                    duplicates_removed += 1
+                    merge_leads(unique[duplicate_key], lead)
+                else:
+                    unique[key] = lead
+
+            if fulfill_quota:
+                preliminary_qualified = _preliminary_qualified_count(
+                    unique.values(),
+                    goal,
+                    lead_filter,
+                )
+
+            if stop_after_query:
+                break
+
+        leads = list(unique.values())
+
+        memory_hits = 0
+        memory_fields_restored = 0
+        memory_rejections_restored = 0
+        if self.lead_memory is not None:
+            for lead in leads:
+                try:
+                    memory = self.lead_memory.hydrate(lead)
+                except Exception as exc:
+                    errors.append(f"{lead.name}: memory hydration failed: {exc}")
+                    continue
+                if memory.matched:
+                    memory_hits += 1
+                    memory_fields_restored += memory.fields_restored
+                    memory_rejections_restored += memory.rejected_restored
+                    # Old cached/memorized data may predate newer validators.
+                    invalid_fields_removed += sanitize_lead_fields(lead, digital_only=digital_contact_only)
+
+        if enrich_web and self.web_search is not None:
+            candidates = leads if enrichment_limit is None else leads[: max(0, enrichment_limit)]
+            for lead in candidates:
+                if lead.website is None or not lead.socials:
+                    try:
+                        enrich_lead_from_web(lead, goal, self.web_search)
+                    except Exception as exc:
+                        from .models import Evidence
+                        lead.evidence.append(Evidence(source=self.web_search.name, kind="enrichment_error", detail=str(exc)))
+
+        # Preliminary score determines which candidates are worth spending a
+        # bounded investigation budget on. Investigation is opt-in so a normal
+        # discovery run never spends unexpected provider credits.
+        for lead in leads:
+            score_lead(lead, prefer_no_website=goal.prefer_no_website)
+        capture_stage(replay_snapshot, "post_discovery", leads)
+
+        investigated_leads = 0
+        investigation_searches = 0
+        investigation_extractions = 0
+        if investigate:
+            if self.investigator is None:
+                errors.append("investigation requested but no investigator is configured")
+            else:
+                # Candidates that already satisfy the cheap discovery-stage
+                # constraints (especially having a useful contact route) must
+                # be investigated first. The previous key used ``not`` together
+                # with ``reverse=True``, accidentally prioritizing candidates
+                # that were *least* likely to survive the final profile filters.
+                ordered = order_for_investigation(leads, lead_filter)
+                cap = len(ordered) if investigation_limit is None else max(0, int(investigation_limit))
+                if fulfill_quota and lead_filter is not None and lead_filter.active:
+                    accepted_before_investigation = sum(
+                        1 for item in leads if preliminary_accepts(item, lead_filter)
+                    )
+                    shortage = max(0, goal.limit - accepted_before_investigation)
+                    if shortage:
+                        cap = min(
+                            len(ordered),
+                            max(cap, shortage + max(2, qualification_buffer)),
+                        )
+                capture_selection(replay_snapshot, "investigation", ordered[:cap])
+                for lead in ordered[:cap]:
+                    try:
+                        investigation = self.investigator.investigate(
+                            lead,
+                            goal,
+                            max_searches=investigation_budget,
+                        )
+                        investigated_leads += 1
+                        investigation_searches += investigation.searches_used
+                        investigation_extractions += int(getattr(investigation, "extraction_calls", 0) or 0)
+                        for error in investigation.errors:
+                            errors.append(f"{lead.name}: {error}")
+                    except Exception as exc:
+                        errors.append(f"{lead.name}: investigation failed: {exc}")
+                    invalid_fields_removed += sanitize_lead_fields(
+                        lead, digital_only=digital_contact_only
+                    )
+                    score_lead(lead, prefer_no_website=goal.prefer_no_website)
+
+                    # Quota-first investigation: once enough candidates already
+                    # satisfy the final deterministic profile, do not keep spending
+                    # provider/LLM calls just to complete the fixed investigation cap.
+                    if (
+                        fulfill_quota
+                        and lead_filter is not None
+                        and lead_filter.active
+                        and _accepted_count(leads, lead_filter) >= goal.limit
+                    ):
+                        break
+
+        # Investigation can change website state, identity and opportunity. Re-score
+        # before choosing audit candidates so the next expensive stage sees the
+        # current state rather than stale discovery scores.
+        for lead in leads:
+            score_lead(lead, prefer_no_website=goal.prefer_no_website)
+
+        capture_stage(replay_snapshot, "post_investigation", leads)
+
+        website_audits_run = 0
+        website_audits_reused = 0
+        website_audit_errors = 0
+        if audit_websites:
+            if self.website_auditor is None:
+                errors.append("website audit requested but no auditor is configured")
+            else:
+                require_verified_audit_identity = bool(
+                    fulfill_quota and lead_filter is not None and lead_filter.active
+                )
+                audit_candidates = [
+                    lead
+                    for lead in leads
+                    if lead.website
+                    and (
+                        not require_verified_audit_identity
+                        or lead.identity_status in {IdentityStatus.MATCHED, IdentityStatus.PROBABLE_MATCH}
+                    )
+                ]
+                audit_candidates = order_for_audit(audit_candidates, lead_filter)
+                cap = len(audit_candidates) if audit_limit is None else max(0, int(audit_limit))
+                if fulfill_quota and lead_filter is not None and lead_filter.active:
+                    shortage = max(0, goal.limit - _accepted_count(leads, lead_filter))
+                    if shortage == 0:
+                        cap = 0
+                    else:
+                        cap = min(cap, shortage + 1)
+                capture_selection(replay_snapshot, "website_audit", audit_candidates[:cap])
+                for lead in audit_candidates[:cap]:
+                    try:
+                        controller.consume(BudgetKind.WEBSITE_AUDIT)
+                        outcome = self.website_auditor.audit(
+                            lead,
+                            timeout=audit_timeout,
+                            max_age_days=audit_ttl_days,
+                            force=refresh_audits,
+                        )
+                        if outcome.reused:
+                            website_audits_reused += 1
+                        else:
+                            website_audits_run += 1
+                        if outcome.audit.error or outcome.audit.blocked:
+                            website_audit_errors += 1
+                    except (BudgetExceeded, RunCancelled) as exc:
+                        errors.append(f"{lead.name}: website audit stopped: {exc}")
+                        break
+                    except Exception as exc:
+                        website_audit_errors += 1
+                        errors.append(f"{lead.name}: website audit failed: {exc}")
+
+        browser_audits_run = 0
+        browser_audits_reused = 0
+        browser_audit_errors = 0
+        if browser_audit:
+            if self.browser_auditor is None:
+                errors.append("browser audit requested but no browser auditor is configured")
+            else:
+                browser_candidates = [lead for lead in leads if lead.website and lead.website_status.value == "present"]
+                browser_candidates = order_for_audit(browser_candidates, lead_filter)
+                cap = len(browser_candidates) if browser_audit_limit is None else max(0, int(browser_audit_limit))
+                capture_selection(replay_snapshot, "browser_audit", browser_candidates[:cap])
+                for lead in browser_candidates[:cap]:
+                    try:
+                        controller.consume(BudgetKind.BROWSER_AUDIT)
+                        outcome = self.browser_auditor.audit(
+                            lead,
+                            timeout=browser_timeout,
+                            max_age_days=browser_audit_ttl_days,
+                            force=refresh_browser_audits,
+                            artifacts_dir=browser_artifacts_dir,
+                        )
+                        if outcome.reused:
+                            browser_audits_reused += 1
+                        else:
+                            browser_audits_run += 1
+                        if outcome.audit.error or not outcome.audit.loaded:
+                            browser_audit_errors += 1
+                    except (BudgetExceeded, RunCancelled) as exc:
+                        errors.append(f"{lead.name}: browser audit stopped: {exc}")
+                        break
+                    except Exception as exc:
+                        browser_audit_errors += 1
+                        errors.append(f"{lead.name}: browser audit failed: {exc}")
+
+        visual_audits_run = 0
+        visual_audits_reused = 0
+        visual_audit_errors = 0
+        if visual_audit:
+            if self.visual_auditor is None:
+                errors.append("visual audit requested but no visual auditor is configured")
+            else:
+                visual_candidates = [
+                    lead for lead in leads
+                    if lead.website
+                    and lead.browser_audit is not None
+                    and lead.browser_audit.loaded
+                    and lead.browser_audit.desktop_screenshot
+                    and lead.browser_audit.mobile_screenshot
+                ]
+                visual_candidates = order_for_audit(visual_candidates, lead_filter)
+                cap = len(visual_candidates) if visual_audit_limit is None else max(0, int(visual_audit_limit))
+                capture_selection(replay_snapshot, "visual_audit", visual_candidates[:cap])
+                for lead in visual_candidates[:cap]:
+                    try:
+                        controller.consume(BudgetKind.VISUAL_AUDIT)
+                        outcome = self.visual_auditor.audit(
+                            lead,
+                            max_age_days=visual_audit_ttl_days,
+                            force=refresh_visual_audits,
+                        )
+                        if outcome.reused:
+                            visual_audits_reused += 1
+                        else:
+                            visual_audits_run += 1
+                        if outcome.audit.confidence < 0.45:
+                            visual_audit_errors += 1
+                            errors.append(
+                                f"{lead.name}: visual audit low confidence "
+                                f"({outcome.audit.confidence:.0%})"
+                            )
+                    except (BudgetExceeded, RunCancelled) as exc:
+                        errors.append(f"{lead.name}: visual audit stopped: {exc}")
+                        break
+                    except Exception as exc:
+                        visual_audit_errors += 1
+                        errors.append(f"{lead.name}: visual audit failed: {exc}")
+
+        capture_stage(replay_snapshot, "post_audits", leads)
+
+        # Re-score after enrichment/investigation/audits because verified fields
+        # and browser behaviour can materially change the opportunity score.
+        for lead in leads:
+            score_lead(lead, prefer_no_website=goal.prefer_no_website)
+
+        filter_candidates_seen = len(leads)
+        filter_rejected = 0
+        filter_rejection_reasons: dict[str, int] = {}
+        if lead_filter is not None and lead_filter.active:
+            accepted: list[Lead] = []
+            for lead in leads:
+                decision = assess_filter(lead, lead_filter)
+                if decision.accepted:
+                    accepted.append(lead)
+                else:
+                    filter_rejected += 1
+                    for reason in decision.reasons:
+                        filter_rejection_reasons[reason] = (
+                            filter_rejection_reasons.get(reason, 0) + 1
+                        )
+            leads = accepted
+
+        leads.sort(
+            key=lambda item: (
+                bool(item.opportunity and item.opportunity.actionable),
+                item.score,
+                item.review_count if item.review_count is not None else -1,
+                item.confidence_score,
+                bool(item.phone),
+            ),
+            reverse=True,
+        )
+        leads = leads[: goal.limit]
+
+        if len(leads) < goal.limit and controller.stop_reason is None:
+            controller.status = RunStatus.PARTIAL_RESULTS
+            controller.stop_reason = (
+                f"quantidade parcial: {len(leads)}/{goal.limit} leads elegíveis após descoberta, "
+                "deduplicação e filtros"
+            )
+
+        cache_after = _cache_snapshot(self.web_search)
+        cache_hits = cache_misses = cache_writes = 0
+        if cache_before is not None and cache_after is not None:
+            delta = cache_after.delta(cache_before)
+            cache_hits = delta.hits
+            cache_misses = delta.misses
+            cache_writes = delta.writes
+
+        controller.finish()
+        return ResearchReport(
+            goal=goal,
+            plan=plan,
+            leads=leads,
+            queries_executed=queries_executed,
+            local_results_seen=source_results_seen,
+            duplicates_removed=duplicates_removed,
+            started_at=started,
+            finished_at=utc_now_iso(),
+            errors=errors,
+            investigated_leads=investigated_leads,
+            investigation_searches=investigation_searches,
+            investigation_extractions=investigation_extractions,
+            search_cache_hits=cache_hits,
+            search_cache_misses=cache_misses,
+            search_cache_writes=cache_writes,
+            memory_hits=memory_hits,
+            memory_fields_restored=memory_fields_restored,
+            memory_rejections_restored=memory_rejections_restored,
+            quality_rejected=quality_rejected,
+            invalid_fields_removed=invalid_fields_removed,
+            website_audits_run=website_audits_run,
+            website_audits_reused=website_audits_reused,
+            website_audit_errors=website_audit_errors,
+            browser_audits_run=browser_audits_run,
+            browser_audits_reused=browser_audits_reused,
+            browser_audit_errors=browser_audit_errors,
+            visual_audits_run=visual_audits_run,
+            visual_audits_reused=visual_audits_reused,
+            visual_audit_errors=visual_audit_errors,
+            filter_candidates_seen=filter_candidates_seen,
+            filter_rejected=filter_rejected,
+            filter_rejection_reasons=filter_rejection_reasons,
+            discovery_unique_candidates=len(unique),
+            discovery_prequalified=preliminary_qualified,
+            run_status=controller.status.value,
+            run_stop_reason=controller.stop_reason,
+            usage_search_calls=controller.usage.search_calls,
+            usage_llm_calls=controller.usage.llm_calls,
+            usage_website_audits=controller.usage.website_audits,
+            usage_browser_audits=controller.usage.browser_audits,
+            usage_visual_audits=controller.usage.visual_audits,
+            replay_snapshot=replay_snapshot,
+        )
+
+
+def _accepted_count(leads, lead_filter: LeadFilterSpec | None) -> int:
+    if lead_filter is None or not lead_filter.active:
+        return len(list(leads))
+    return sum(1 for lead in leads if assess_filter(lead, lead_filter).accepted)
+
+
+def _has_deferred_preliminary_filters(lead_filter: LeadFilterSpec | None) -> bool:
+    if lead_filter is None or not lead_filter.active:
+        return False
+    return bool(
+        lead_filter.website_states
+        or lead_filter.readiness.value != "any"
+        or lead_filter.opportunity_types
+        or lead_filter.min_opportunity_score is not None
+        or lead_filter.max_technical_score is not None
+        or lead_filter.max_browser_score is not None
+        or lead_filter.max_visual_score is not None
+    )
+
+
+def _preliminary_qualified_count(
+    leads,
+    goal: SearchGoal,
+    lead_filter: LeadFilterSpec | None,
+) -> int:
+    del goal  # preliminary qualification deliberately ignores post-processing scores
+    return sum(1 for lead in leads if preliminary_accepts(lead, lead_filter))
+
+
+def _cache_snapshot(provider):
+    if provider is None:
+        return None
+    snapshot = getattr(provider, "cache_snapshot", None)
+    if snapshot is None:
+        return None
+    try:
+        return snapshot()
+    except Exception:
+        return None
+
+
+def _build_web_discovery_query(query: str, goal: SearchGoal) -> str:
+    """Turn planner phrases into complementary retrieval strategies."""
+    location = " ".join(part for part in (goal.city, goal.state) if part).strip()
+    folded = query.casefold()
+
+    if "instagram" in folded:
+        return f'"{query}" "{location}" perfil Instagram contato'.strip()
+    if "whatsapp" in folded or "celular" in folded or "contato" in folded:
+        return f'"{query}" "{location}" WhatsApp celular contato'.strip()
+    if "site" in folded or "presença digital" in folded or "presenca digital" in folded:
+        return f'"{query}" "{location}" site oficial portfólio contato'.strip()
+    if "avalia" in folded or "região" in folded or "regiao" in folded or "perto" in folded:
+        return f'"{query}" "{location}" avaliações endereço telefone'.strip()
+    if "catálogo" in folded or "catalogo" in folded or "projet" in folded:
+        return f'"{query}" "{location}" catálogo projetos Instagram'.strip()
+
+    return f'"{query}" "{location}" telefone OR WhatsApp OR Instagram'.strip()

@@ -1,0 +1,30 @@
+[project]
+name = "leadflow-agent"
+version = "0.2.0a1"
+description = "AI-assisted lead discovery and opportunity intelligence engine"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+
+[project.optional-dependencies]
+browser = [
+    "playwright>=1.55"
+]
+api = [
+    "fastapi>=0.118.3,<1",
+    "uvicorn>=0.41,<1"
+]
+
+[project.scripts]
+leadflow = "leadflow_agent.cli:main"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["leadflow_agent*"]
+exclude = ["tests*", "data*", "output*"]
+namespaces = false
